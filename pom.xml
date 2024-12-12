@@ -52,7 +52,7 @@
 							<include>**/*</include>
 						</includes>
 						<merge>true</merge>
-						<repositoryName>BjlFileSystem</repositoryName>
+						<repositoryName>BjlFileSystemSftp</repositoryName>
 						<repositoryOwner>tony-bringardner</repositoryOwner>
 						<server>github</server>
 					</configuration>
@@ -83,7 +83,7 @@
 		<repository>
 			<id>github</id>
 			<name>tony-bringardner</name>
-			<url>https://maven.pkg.github.com/tony-bringardner/BjlFileSystem</url>
+			<url>https://maven.pkg.github.com/tony-bringardner/BjlFileSystemSftp</url>
 		</repository>
 
 	</distributionManagement>
