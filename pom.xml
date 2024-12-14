@@ -8,7 +8,7 @@
 	<name>SFTP FileSource</name>
 	<description>Contains the SSH/SFTP implementation of the FileSource interface</description>
 
-<build>
+	<build>
 		<!-- <sourceDirectory>src</sourceDirectory> -->
 		<pluginManagement>
 			<plugins>
