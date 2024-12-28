@@ -823,17 +823,6 @@ public class SftpFileSource extends BaseObject implements FileSource {
 	}
 
 	@Override
-	public boolean renameTo(String s) {
-		boolean ret = false;
-		try {
-			factory.getSftp_().rename(path, s);
-			ret = true;
-		} catch (SftpException | IOException e) {
-		}
-		return ret;
-	}
-
-	@Override
 	public String getTitle() throws IOException {
 		Session session = factory.getSession();
 		return session.getUserName()+"@"+session.getHost()+":"+path;
