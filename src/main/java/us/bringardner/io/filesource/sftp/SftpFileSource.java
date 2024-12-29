@@ -436,7 +436,8 @@ public class SftpFileSource extends BaseObject implements FileSource {
 
 
 	private void addChild(SftpFileSource child) throws IOException {
-
+		kids = null;
+		/*
 		getKids();
 		SftpFileSource tmp[] = new SftpFileSource[kids.length+1];
 		for (int idx = 0; idx < kids.length; idx++) {
@@ -444,6 +445,7 @@ public class SftpFileSource extends BaseObject implements FileSource {
 		}
 		tmp[kids.length] = child;
 		kids = tmp;
+		*/
 	}
 
 	private SftpFileSource findChild(String name) throws IOException {
