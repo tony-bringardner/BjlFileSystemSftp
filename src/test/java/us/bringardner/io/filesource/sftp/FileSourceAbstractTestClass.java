@@ -21,7 +21,7 @@
  *	@author Tony Bringardner   
  *
  *
- * ~version~V000.01.06-V000.01.20-V000.01.19-V000.01.17-V000.01.16-V000.01.15-V000.01.09-V000.01.05-V000.01.02-V000.01.01-V000.00.05-V000.00.02-V000.00.01-V000.00.00-
+ * ~version~V000.01.20-V000.01.19-V000.01.17-V000.01.16-V000.01.15-V000.01.09-V000.01.05-V000.01.02-V000.01.01-V000.00.05-V000.00.02-V000.00.01-V000.00.00-
  */
 package us.bringardner.io.filesource.sftp;
 
@@ -29,6 +29,7 @@ import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -38,13 +39,38 @@ import java.io.InputStream;
 import java.io.OutputStream;
 
 import org.junit.jupiter.api.AfterAll;
+import org.junit.jupiter.api.MethodOrderer.OrderAnnotation;
+import org.junit.jupiter.api.Order;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.TestMethodOrder;
 
 import us.bringardner.io.filesource.FileSource;
 import us.bringardner.io.filesource.FileSourceFactory;
 
 
+@TestMethodOrder(OrderAnnotation.class)
 public abstract class FileSourceAbstractTestClass {
+
+	
+	public enum Permisions {
+		OwnerRead('r'),
+		OwnerWrite('w'),
+		OwnerExecute('x'),
+
+		GroupRead('r'),
+		GroupWrite('w'),
+		GroupExecute('x'),
+
+		OtherRead('r'),
+		OtherWrite('w'),
+		OtherExecute('x');
+
+	    public final char label;
+
+	    private Permisions(char label) {
+	        this.label = label;
+	    }
+	}
 
 	interface TestAction {
 		void doSomthing(FileSource dir);
@@ -112,7 +138,10 @@ public abstract class FileSourceAbstractTestClass {
 
 	public static void compare(String name,FileSource source, FileSource target) throws IOException {
 		assertTrue("Source file does not exist ("+source.getName()+")",source.exists());
-		assertTrue("Target file does not exist ("+target.getName()+")",target.exists());
+		assertTrue("Target file does not exist ("+
+		target.getName()+")",
+		target.exists()
+		);
 
 		assertEquals(name+" are not the same type",source.isDirectory(), target.isDirectory());
 
@@ -180,6 +209,7 @@ public abstract class FileSourceAbstractTestClass {
 		}
 	}
 
+	// 336-518-5261 Alan's Diana
 
 	public static void copy(InputStream in, OutputStream out) throws IOException {
 		// use a small buffer to get multiple reads 
@@ -207,6 +237,7 @@ public abstract class FileSourceAbstractTestClass {
 	}
 
 	@Test
+	@Order(1)
 	public void testRoots() throws IOException {
 		FileSource [] roots = factory.listRoots();
 		assertNotNull("Roots are null",roots);
@@ -215,6 +246,7 @@ public abstract class FileSourceAbstractTestClass {
 	}
 
 	@Test 
+	@Order(2)
 	public void replicateTestDir() throws IOException {
 		FileSource _localDir = FileSourceFactory.getDefaultFactory().createFileSource(localTestFileDirPath);
 		assertTrue("local test dir does not exist ="+_localDir,_localDir.isDirectory());
@@ -231,66 +263,23 @@ public abstract class FileSourceAbstractTestClass {
 		FileSource remoteDir = factory.createFileSource(remoteTestFileDirPath);
 		traverseDir(remoteDir, null);
 		if( !remoteDir.exists()) {
-			remoteDir.mkdir();
+			assertTrue("Cannot create remote directory"+remoteDir,
+					remoteDir.mkdirs()
+					);			
 		}
 		traverseDir(remoteDir, null);
 
 
 
 		for(FileSource source : cacheDir.listFiles()) {
-			FileSource dest = remoteDir.getChild(source.getName());
+			String nm = source.getName();
+			FileSource dest = remoteDir.getChild(nm);
 			copy(source, dest);
 			compare("Copy to remote dir", source, dest);			
 		}
 		traverseDir(remoteDir, null);
 
-		if(verbose) System.out.println("Test set readable and set writable\\n");
-		for(FileSource file : remoteDir.listFiles()) {
-			file.setReadable(false);
-			traverseDir(file, null);
-			String content = null;
-			try {
-				try(InputStream in = file.getInputStream()) {	
-					if( in != null ) {
-						assertTrue("getInputStream should throw permission denied",false);
-					}
-				}
-			} catch (Throwable e) {
-				file.setReadable(true);
-				traverseDir(file, null);
-				try {
-					try(InputStream in = file.getInputStream()) {	
-						if( in == null ) {
-							assertTrue("getInputStream should return a stream",false);
-						}	else {
-							content = new String(in.readAllBytes());
-							assertEquals("Content len does not match file len",content.length(), file.length());
-						}
-					}
-				} catch (Throwable e2) {
-					e2.printStackTrace();
-					assertTrue("Unexpected error "+e2, false);
-				}
-			}
-			file.setWritable(false);
-			traverseDir(file, null);
-			try {
-				try(OutputStream out = file.getOutputStream()) {	
-					if( out == null ) {
-						assertTrue("getOutputStream should return throw permission denied",false);
-					}	
-				}
-			} catch (Throwable e2) {				
-			}
-			
-			file.setWritable(true);
-			traverseDir(file, null);
-			try(OutputStream out = file.getOutputStream()) {
-				out.write(content.getBytes());
-			}
-			assertEquals("Content len does not match file len",content.length(), file.length());
-		}
-
+		
 		if(verbose) System.out.println("Rename files\n");
 		for(FileSource remoteFile : remoteDir.listFiles()) {
 			String fileName = remoteFile.getName();
@@ -299,12 +288,14 @@ public abstract class FileSourceAbstractTestClass {
 			FileSource remoteParent = remoteFile.getParentFile();
 			
 			FileSource renamedFile = remoteParent.getChild(fileName+".changed");
-			assertTrue(remoteFile.renameTo(renamedFile),"Can't rename "+remoteFile+" to "+renamedFile);
 			
+			renameAndValidate(remoteFile,renamedFile);
+						
 			compare(fileName, localFile, renamedFile);
-			assertTrue(renamedFile.exists(),"New file does not exist after rename");
-			assertFalse(remoteFile.exists(),"remoteFile still exists after rename");
-			assertTrue(renamedFile.renameTo(remoteFile),"Can't rename back to original. "+renamedFile+" to "+remoteFile);
+			
+			renameAndValidate(renamedFile,remoteFile);
+			
+			
 			compare(fileName, localFile, remoteFile);
 			
 		}
@@ -318,5 +309,101 @@ public abstract class FileSourceAbstractTestClass {
 
 	}
 
+	private void renameAndValidate(FileSource source, FileSource target) throws IOException {
+		assertTrue(
+				source.renameTo(target)
+				,"Can't rename "+source+" to "+target);			
+		assertTrue(
+				target.exists()
+				,"New file does not exist after rename");
+		assertFalse(
+				source.exists()
+				,"remoteFile still exists after rename");		
+	}
+
+	@Test 
+	@Order(3)
+	public void testPermissions() throws IOException {
+		FileSource remoteDir = factory.createFileSource(remoteTestFileDirPath);
+		if( !remoteDir.exists()) {
+			assertTrue(remoteDir.mkdirs(),"Can't create dirs for "+remoteTestFileDirPath);
+		}
+		
+		FileSource file = remoteDir.getChild("TestPermissions.txt");
+		try(OutputStream out = file.getOutputStream()) {
+			out.write("Put some data in the file".getBytes());
+		}
+		
+
+		for(Permisions p : Permisions.values()) {
+			//  if we turn off owner write we won't be able to turn it back on.
+			if( p != Permisions.OwnerWrite) {
+				changeAndValidatePermission(p,file);
+			}
+		}
+		
+		assertTrue(file.delete(),"Can't delete "+file);
+		
+	}
+
+	private boolean setPermission(Permisions p, FileSource file,boolean b) throws IOException {
+		boolean ret = false;
+		switch (p) {
+		case OwnerRead: 	ret = file.setOwnerReadable(b); break;
+		case OwnerWrite:	ret = file.setOwnerWritable(b); break;
+		case OwnerExecute:	ret = file.setOwnerExecutable(b); break;
+
+		case GroupRead: 	ret = file.setGroupReadable(b); break;
+		case GroupWrite:	ret = file.setGroupWritable(b); break;
+		case GroupExecute:	ret = file.setGroupExecutable(b); break;
+
+		case OtherRead: 	ret = file.setOtherReadable(b); break;
+		case OtherWrite:	ret = file.setOtherWritable(b); break;
+		case OtherExecute:	ret = file.setOtherExecutable(b); break;
+
+		default:
+			throw new RuntimeException("Invalid permision="+p);
+		}
+		
+		return ret;
+	}
+	
+	private boolean getPermission(Permisions p, FileSource file) throws IOException {
+		boolean ret = false;
+		switch (p) {
+		case OwnerRead:    ret = file.canOwnerRead(); break;
+		case OwnerWrite:   ret = file.canOwnerWrite(); break;
+		case OwnerExecute: ret = file.canOwnerExecute(); break;
+		
+		case GroupRead:    ret = file.canGroupRead(); break;
+		case GroupWrite:   ret = file.canGroupWrite(); break;
+		case GroupExecute: ret = file.canGroupExecute(); break;
+		
+		case OtherRead:    ret = file.canOtherRead(); break;
+		case OtherWrite:   ret = file.canOtherWrite(); break;
+		case OtherExecute: ret = file.canOtherExecute(); break;
+		
+		default:
+			throw new RuntimeException("Invalid permision="+p);			
+		}
+		return ret;
+	}
+	
+	private void changeAndValidatePermission(Permisions p, FileSource file) throws IOException {
+		
+		//Get the current value		
+		boolean b = getPermission(p, file);
+		
+		// toggle it 
+		assertTrue(setPermission(p, file, !b),"set permission failed p="+p);
+		boolean b2 = getPermission(p, file);
+		assertEquals(b2, !b,"permision did not change p="+p);
+		
+		// Set it back
+		assertTrue(setPermission(p, file, b),"reset permission failed p="+p);		
+		assertEquals(getPermission(p, file), b,"permision did not change back to original p="+p);
+		
+		
+	}
 
 }

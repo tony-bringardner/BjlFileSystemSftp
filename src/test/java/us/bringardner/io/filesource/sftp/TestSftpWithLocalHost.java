@@ -19,6 +19,7 @@ import com.sshtools.server.InMemoryPasswordAuthenticator;
 import com.sshtools.server.SshServer;
 
 
+
 public class TestSftpWithLocalHost extends FileSourceAbstractTestClass {
 	//https://jadaptive.com/java-ssh-library/maverick-synergy/creating-an-interactive-terminal/
 	static SshServer server;

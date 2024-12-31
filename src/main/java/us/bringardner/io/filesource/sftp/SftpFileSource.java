@@ -678,13 +678,14 @@ public class SftpFileSource extends BaseObject implements FileSource {
 	}
 
 	@Override
-	public synchronized  void setLastModifiedTime(long time) throws IOException {
+	public synchronized  boolean setLastModifiedTime(long time) throws IOException {
 		try {
 			factory.getSftp_().setMtime(path, (int) (time / 1000));
 			attr = null;
 			getAttr();
+			return true;
 		} catch (SftpException e) {
-			throw new IOException(e);
+			return false;
 		}
 	}
 
@@ -768,13 +769,13 @@ public class SftpFileSource extends BaseObject implements FileSource {
 	}
 
 	@Override
-	public void setVersionDate(long time) throws IOException {
-
+	public boolean setVersionDate(long time) throws IOException {
+		return false;
 	}
 
 	@Override
-	public void setVersion(long version, boolean saveChange) throws IOException {
-
+	public boolean setVersion(long version, boolean saveChange) throws IOException {
+		return false;
 	}
 
 	@Override
@@ -908,7 +909,7 @@ public class SftpFileSource extends BaseObject implements FileSource {
 	}
 
 	@Override
-	public void setExecutable(boolean b) throws IOException {
+	public boolean setExecutable(boolean b) throws IOException {
 		try {
 
 			int perm = getAttr().getPermissions() & 0b111111111;
@@ -923,13 +924,14 @@ public class SftpFileSource extends BaseObject implements FileSource {
 				factory.getSftp_().chmod(p2, path);
 				attr = null;
 			}			
+			return true;
 		} catch (SftpException e) {
-			throw new IOException(e);
+			return false;
 		}
 	}
 
 	@Override
-	public void setReadable(boolean readable) throws IOException {
+	public boolean setReadable(boolean readable) throws IOException {
 		try {
 			int perm = getAttr().getPermissions() & 0b111111111;
 			int r2 = -1;
@@ -943,15 +945,15 @@ public class SftpFileSource extends BaseObject implements FileSource {
 				factory.getSftp_().chmod(r2, path);
 				attr = null;
 			}		
-
+			return true;
 		} catch (SftpException e) {
-			throw new IOException(e);
+			return false;
 		}
 
 	}
 
 	@Override
-	public void setWritable(boolean b) throws IOException {
+	public boolean setWritable(boolean b) throws IOException {
 		try {
 			int perm = getAttr().getPermissions() & 0b111111111;
 			int r2 = -1;
@@ -965,45 +967,60 @@ public class SftpFileSource extends BaseObject implements FileSource {
 				factory.getSftp_().chmod(r2, path);
 				attr = null;
 			}			
+			return true;
 		} catch (SftpException e) {
-			throw new IOException(e);
+			return false;
 		}
 
 	}
 
 	@Override
-	public void setExecutable(boolean executable, boolean ownerOnly) throws IOException {
-		setExecutable(executable);
-		if( ownerOnly ) {
-			setGroupExecutable(!executable);
-			setOtherExecutable(!executable);
+	public boolean setExecutable(boolean executable, boolean ownerOnly) throws IOException {
+		boolean ret = setExecutable(executable);
+		if(ret && !ownerOnly ) {
+			ret = setGroupExecutable(executable);
+			if( ret ) {
+				ret = setOtherExecutable(executable);
+			}
 		} 
-
+		if( ret ) {
+			attr = null;
+		}
+		return ret;
 	}
 
 	@Override
-	public void setReadable(boolean readable, boolean ownerOnly) throws IOException {
-		setReadable(readable);
-		if( ownerOnly ) {
-			setGroupReadable(!readable);
-			setOtherReadable(!readable);
-		} 				
+	public boolean setReadable(boolean readable, boolean ownerOnly) throws IOException {
+		boolean ret = setReadable(readable);
+		if(ret && !ownerOnly ) {
+			if( ret = setGroupReadable(readable)) {
+				ret = setOtherReadable(readable);
+			}
+		} 	
+		if( ret ) {
+			attr = null;
+		}
+		return ret;
 	}
 
 
 	@Override
-	public void setWritable(boolean writetable, boolean ownerOnly) throws IOException  {
+	public boolean setWritable(boolean writetable, boolean ownerOnly) throws IOException  {
 
-		setWritable(writetable);
-		if( ownerOnly ) {
-			setGroupWritable(!writetable);
-			setOtherWritable(!writetable);
-		} 
-
+		boolean ret = setWritable(writetable);
+		if(ret && ownerOnly ) {
+			if( (ret=setGroupWritable(writetable))) {
+				ret = setOtherWritable(writetable);
+			}
+		}
+		if( ret ) {
+			attr = null;
+		}
+		return ret;
 	}
 
 	@Override
-	public void setGroupReadable(boolean b) throws IOException {
+	public boolean setGroupReadable(boolean b) throws IOException {
 		try {
 
 			int perm = getAttr().getPermissions() & 0b111111111;
@@ -1018,14 +1035,14 @@ public class SftpFileSource extends BaseObject implements FileSource {
 				factory.getSftp_().chmod(r2, path);
 				attr = null;
 			}						
-
+			return true;
 		} catch (SftpException e) {		
-			throw new IOException(e);
+			return false;
 		}
 	}
 
 	@Override
-	public void setGroupWritable(boolean b) throws IOException {
+	public boolean setGroupWritable(boolean b) throws IOException {
 		try {
 
 			int perm = getAttr().getPermissions() & 0b111111111;
@@ -1041,14 +1058,14 @@ public class SftpFileSource extends BaseObject implements FileSource {
 				factory.getSftp_().chmod(r2, path);
 				attr = null;
 			}				
-
+			return true;
 		} catch (SftpException e) {		
-			throw new IOException(e);
+			return false;
 		}
 	}
 
 	@Override
-	public void setGroupExecutable(boolean b) throws IOException {
+	public boolean setGroupExecutable(boolean b) throws IOException {
 		try {
 			int perm = getAttr().getPermissions() & 0b111111111;
 
@@ -1063,14 +1080,14 @@ public class SftpFileSource extends BaseObject implements FileSource {
 				factory.getSftp_().chmod(r2, path);
 				attr = null;
 			}			
-
+			return true;
 		} catch (SftpException  e) {
-			throw new IOException(e);
+			return false;
 		}
 	}
 
 	@Override
-	public void setOtherReadable(boolean b) throws IOException {
+	public boolean setOtherReadable(boolean b) throws IOException {
 		try {
 			int perm = getAttr().getPermissions() & 0b111111111;
 
@@ -1085,14 +1102,14 @@ public class SftpFileSource extends BaseObject implements FileSource {
 				factory.getSftp_().chmod(r2, path);
 				attr = null;
 			}			
-
+			return true;
 		} catch (SftpException e) {		
-			throw new IOException(e);
+			return false;
 		}
 	}
 
 	@Override
-	public void setOtherWritable(boolean b) throws IOException {
+	public boolean setOtherWritable(boolean b) throws IOException {
 		try {
 
 			int perm = getAttr().getPermissions() & 0b111111111;
@@ -1108,14 +1125,14 @@ public class SftpFileSource extends BaseObject implements FileSource {
 				factory.getSftp_().chmod(r2, path);
 				attr = null;
 			}			
-
+			return true;
 		} catch (SftpException e) {		
-			throw new IOException(e);
+			return false;
 		}
 	}
 
 	@Override
-	public void setOtherExecutable(boolean b) throws IOException {
+	public boolean setOtherExecutable(boolean b) throws IOException {
 		try {
 
 			int perm = getAttr().getPermissions() & 0b111111111;
@@ -1131,25 +1148,25 @@ public class SftpFileSource extends BaseObject implements FileSource {
 				factory.getSftp_().chmod(r2, path);
 				attr = null;
 			}			
-
+			return true;
 		} catch (SftpException e) {		
-			throw new IOException(e);
+			return false;
 		}
 	}
 
 	@Override
-	public void setOwnerReadable(boolean b) throws IOException {
-		setReadable(b);
+	public boolean setOwnerReadable(boolean b) throws IOException {
+		return setReadable(b);
 	}
 
 	@Override
-	public void setOwnerWritable(boolean b) throws IOException {
-		setWritable(b);
+	public boolean setOwnerWritable(boolean b) throws IOException {
+		return setWritable(b);
 	}
 
 	@Override
-	public void setOwnerExecutable(boolean b) throws IOException {
-		setExecutable(b);
+	public boolean setOwnerExecutable(boolean b) throws IOException {
+		return setExecutable(b);
 	}
 
 	@Override
@@ -1161,6 +1178,30 @@ public class SftpFileSource extends BaseObject implements FileSource {
 	public long creationTime() throws IOException {
 		// not supported
 		return 0;
+	}
+
+	@Override
+	public boolean setLastAccessTime(long time) throws IOException {
+		// TODO Auto-generated method stub
+		return false;
+	}
+
+	@Override
+	public boolean setCreateTime(long time) throws IOException {
+		// TODO Auto-generated method stub
+		return false;
+	}
+
+	@Override
+	public boolean setGroup(GroupPrincipal group) throws IOException {
+		// TODO Auto-generated method stub
+		return false;
+	}
+
+	@Override
+	public boolean setOwner(UserPrincipal owner) throws IOException {
+		// TODO Auto-generated method stub
+		return false;
 	}
 
 }
