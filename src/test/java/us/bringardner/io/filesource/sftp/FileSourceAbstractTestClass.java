@@ -52,7 +52,7 @@ import us.bringardner.io.filesource.FileSourceFactory;
 public abstract class FileSourceAbstractTestClass {
 
 	
-	public enum Permisions {
+	public enum Permissions {
 		OwnerRead('r'),
 		OwnerWrite('w'),
 		OwnerExecute('x'),
@@ -67,7 +67,7 @@ public abstract class FileSourceAbstractTestClass {
 
 	    public final char label;
 
-	    private Permisions(char label) {
+	    private Permissions(char label) {
 	        this.label = label;
 	    }
 	}
@@ -335,9 +335,9 @@ public abstract class FileSourceAbstractTestClass {
 		}
 		
 
-		for(Permisions p : Permisions.values()) {
+		for(Permissions p : Permissions.values()) {
 			//  if we turn off owner write we won't be able to turn it back on.
-			if( p != Permisions.OwnerWrite) {
+			if( p != Permissions.OwnerWrite) {
 				changeAndValidatePermission(p,file);
 			}
 		}
@@ -346,7 +346,7 @@ public abstract class FileSourceAbstractTestClass {
 		
 	}
 
-	private boolean setPermission(Permisions p, FileSource file,boolean b) throws IOException {
+	private boolean setPermission(Permissions p, FileSource file,boolean b) throws IOException {
 		boolean ret = false;
 		switch (p) {
 		case OwnerRead: 	ret = file.setOwnerReadable(b); break;
@@ -368,7 +368,7 @@ public abstract class FileSourceAbstractTestClass {
 		return ret;
 	}
 	
-	private boolean getPermission(Permisions p, FileSource file) throws IOException {
+	private boolean getPermission(Permissions p, FileSource file) throws IOException {
 		boolean ret = false;
 		switch (p) {
 		case OwnerRead:    ret = file.canOwnerRead(); break;
@@ -389,7 +389,7 @@ public abstract class FileSourceAbstractTestClass {
 		return ret;
 	}
 	
-	private void changeAndValidatePermission(Permisions p, FileSource file) throws IOException {
+	private void changeAndValidatePermission(Permissions p, FileSource file) throws IOException {
 		
 		//Get the current value		
 		boolean b = getPermission(p, file);
