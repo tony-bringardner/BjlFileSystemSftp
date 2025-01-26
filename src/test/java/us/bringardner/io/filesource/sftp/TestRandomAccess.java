@@ -27,6 +27,10 @@ import com.sshtools.common.policy.FileFactory;
 import com.sshtools.common.ssh.SshConnection;
 import com.sshtools.server.InMemoryPasswordAuthenticator;
 import com.sshtools.server.SshServer;
+import com.sshtools.server.vsession.ShellCommandFactory;
+import com.sshtools.server.vsession.VirtualChannelFactory;
+import com.sshtools.server.vsession.commands.admin.AdminCommandFactory;
+import com.sshtools.server.vsession.commands.fs.FileSystemCommandFactory;
 
 import us.bringardner.io.filesource.FileSource;
 
@@ -55,7 +59,10 @@ public class TestRandomAccess {
 		server = new SshServer(port);
 
 		server.addAuthenticator(new InMemoryPasswordAuthenticator().addUser(user,password.toCharArray()));
-		//server.setChannelFactory(new CompoundChannelFactory<>());
+		server.setChannelFactory(new VirtualChannelFactory(
+				new ShellCommandFactory(
+					new AdminCommandFactory(),
+						new FileSystemCommandFactory())));
 		server.setFileFactory(new FileFactory() {
 			
 			@Override
@@ -83,13 +90,7 @@ public class TestRandomAccess {
 		factory = new SftpFileSourceFactory();
 
 		Properties p = factory.getConnectProperties();
-/*
-		user = "tony";
-		host = "bringardner.us";
-		password = "0000";
-		port = 22;
 
-*/
 		p.setProperty("user", user);
 		p.setProperty("host", host);
 		p.setProperty("port", ""+port);
@@ -137,10 +138,6 @@ public class TestRandomAccess {
 					"Cannot create remote directory"+remoteDir
 					);			
 		}
-		for(FileSource f : remoteDir.listFiles()) {
-			System.out.println(f);
-		}
-
 
 		testFile = remoteDir.getChild("RamUnitTests.txt");
 		int targetLen = 10240;

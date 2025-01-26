@@ -63,12 +63,9 @@ public class SftpRandomAccessIoController  implements IRandomAccessIoController 
 			data = new byte[chunkSize];
 			start = len;
 		} else {
-			//int maxChunk = (int)(len/chunkSize);
 			int chunk = (int)(pos/chunkSize);
 			start = chunk * chunkSize;
-			//byte [] handle = channel.openFile(file.getAbsolutePath());
 			data = channel.readFileChunk(handle, start, chunkSize);
-			//channel.closeFile(handle);
 			size = data.length;
 			
 		}
@@ -148,9 +145,7 @@ public class SftpRandomAccessIoController  implements IRandomAccessIoController 
 		data = new byte[1];
 		data[0] = 'Z';
 		len = newLength;
-		//byte [] handle = channel.openFile(file.getAbsolutePath());
 		channel.writeFileChunk(handle, newLength-1, data);
-		//channel.closeFile(handle);
 	}
 
 
@@ -196,9 +191,7 @@ public class SftpRandomAccessIoController  implements IRandomAccessIoController 
 			}
 			data = tmp;			
 		}
-		//byte [] handle = channel.openFile(file.getAbsolutePath());
 		channel.writeFileChunk(handle, start, data);
-		//channel.closeFile(handle);
 		maxWritePosition = -1;
 	}
 
