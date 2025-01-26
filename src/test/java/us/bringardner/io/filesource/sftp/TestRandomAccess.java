@@ -8,7 +8,10 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import java.io.File;
 import java.io.IOException;
 import java.io.OutputStream;
+import java.util.HashMap;
+import java.util.Map;
 import java.util.Properties;
+import java.util.Random;
 
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
@@ -21,12 +24,9 @@ import com.sshtools.common.files.AbstractFileFactory;
 import com.sshtools.common.files.direct.NioFileFactory.NioFileFactoryBuilder;
 import com.sshtools.common.permissions.PermissionDeniedException;
 import com.sshtools.common.policy.FileFactory;
-import com.sshtools.common.scp.ScpCommand.ScpCommandFactory;
 import com.sshtools.common.ssh.SshConnection;
-import com.sshtools.server.DefaultServerChannelFactory;
 import com.sshtools.server.InMemoryPasswordAuthenticator;
 import com.sshtools.server.SshServer;
-import com.sshtools.synergy.ssh.CompoundChannelFactory;
 
 import us.bringardner.io.filesource.FileSource;
 
@@ -40,27 +40,24 @@ public class TestRandomAccess {
 	static String password = "bar";
 	static String host = "localhost";
 	static int timeout = 5000;
-	private static String localTestFileDirPath;
-	private static String localCacheDirPath;
 	private static String remoteTestFileDirPath;
 	private static SftpFileSourceFactory factory;
 	public static String testDataString = "0123456789";
 	public static byte[] testData = testDataString.getBytes();
-	
+
 
 	private FileSource testFile;
-	
+
 	@BeforeAll
 	public static void setupBeforeAll() throws IOException {
-		localTestFileDirPath="TestFiles";
-		localCacheDirPath = "target/LocalCache";
 		remoteTestFileDirPath = "target/SftpTest";
 
 		server = new SshServer(port);
-		
+
 		server.addAuthenticator(new InMemoryPasswordAuthenticator().addUser(user,password.toCharArray()));
 		//server.setChannelFactory(new CompoundChannelFactory<>());
 		server.setFileFactory(new FileFactory() {
+			
 			@Override
 			public AbstractFileFactory<?> getFileFactory(SshConnection con) throws IOException, PermissionDeniedException {
 				return NioFileFactoryBuilder.create()
@@ -86,13 +83,13 @@ public class TestRandomAccess {
 		factory = new SftpFileSourceFactory();
 
 		Properties p = factory.getConnectProperties();
-		
+/*
 		user = "tony";
 		host = "bringardner.us";
 		password = "0000";
 		port = 22;
-		
-		
+
+*/
 		p.setProperty("user", user);
 		p.setProperty("host", host);
 		p.setProperty("port", ""+port);
@@ -128,8 +125,8 @@ public class TestRandomAccess {
 		}
 	}
 
-	
-	
+
+
 	@Test
 	@Order(1)
 	public void createFile() throws IOException {
@@ -144,17 +141,17 @@ public class TestRandomAccess {
 			System.out.println(f);
 		}
 
-		
+
 		testFile = remoteDir.getChild("RamUnitTests.txt");
-		int targetLen = 1024*10;
-		
+		int targetLen = 10240;
+
 		try(OutputStream out = testFile.getOutputStream()) {
 			int size = 0;
 			while( size < targetLen) {
 				out.write(testData);
 				size += testData.length;
 			}
-			
+
 		}
 
 	}
@@ -162,18 +159,17 @@ public class TestRandomAccess {
 	@Test
 	@Order(2)
 	public void testReadRandomcIo() throws Exception {
-		
+
 		FileSource remoteDir = factory.createFileSource(remoteTestFileDirPath);
-		
+
 		testFile = remoteDir.getChild("RamUnitTests.txt");
 		long len = testFile.length();
 		long pos = 0;
-		
+
 		// Read forward
 		try(SftpRandomAccessIoController ram = new SftpRandomAccessIoController((SftpFileSource) testFile)){
 			long l2 = ram.length();
 			assertEquals(len, l2,"Start lengths do not match");
-			ram.setLength(1000);
 			while(pos < l2) {
 				int idx = (int) (pos % testData.length);
 				int expect = testData[idx];
@@ -183,13 +179,13 @@ public class TestRandomAccess {
 			}
 		}
 		// Read backwards
-		
+
 		pos = testFile.length();
 		try(SftpRandomAccessIoController ram = new SftpRandomAccessIoController((SftpFileSource) testFile)){
 			long l2 = ram.length();
 			assertEquals(len, l2,"Start lengths do not match");
 			pos = l2-1;
-			
+
 			while(pos >= 0 ) {
 				int idx = (int) (pos % testData.length);
 				int expect = testData[idx];
@@ -198,8 +194,77 @@ public class TestRandomAccess {
 				pos--;
 			}
 		}
-						
+
 	}
 
+	@Test
+	@Order(3)
+	public void testWriteRandomcIo() throws Exception {
+
+		
+		String alpa = "abcdefghijklmnopqrstuvwxyz";
+
+		Map<Long,Integer> changes = new HashMap<>();
+
+		FileSource remoteDir = factory.createFileSource(remoteTestFileDirPath);
+
+		testFile = remoteDir.getChild("RamUnitTests.txt");
+		
+		long targetLen = testFile.length();
+		try(OutputStream out = testFile.getOutputStream()) {
+			int size = 0;
+			int chunk = 0;
+			while( size < targetLen) {
+				String tmp = String.format("|--%4d--|", chunk++);
+				out.write(tmp.getBytes());
+				size += tmp.length();
+			}
+
+		}
+
+		
+		
+		
+		long len = testFile.length();
+		int targetChangeCount = 100;
+
+		//  randomly make changes
+		try(SftpRandomAccessIoController ram = new SftpRandomAccessIoController((SftpFileSource) testFile)){
+			Random r = new Random();
+
+			for(int idx=0; idx < targetChangeCount; idx++ ) {
+				long pos = r.nextInt((int)len);
+				while( changes.containsKey(pos)) {
+					pos = r.nextInt((int)len);
+				}
+				
+				@SuppressWarnings("unused")
+				int current = ram.read(pos);
+				int value = alpa.charAt(r.nextInt(alpa.length()));
+				ram.write(pos,(byte) value);
+				int updated = ram.read(pos);
+				assertEquals(value, updated,"Updated char is wrong");
+				changes.put(pos, value);
+			}
+
+		}
+
+		//  validate changes
+		try(SftpRandomAccessIoController ram = new SftpRandomAccessIoController((SftpFileSource) testFile)){
+			int idx = 0;
+			for(Long pos : changes.keySet()) {
+				int expect = changes.get(pos);
+				int actual = ram.read(pos);
+				char e = (char)expect;
+				char a = (char)actual;
+
+				if( actual != expect) {					
+					System.out.println("Wrong e="+e+" a="+a);
+				}
+				assertEquals(expect, actual,"Validate: Updated char is wrong at idx="+idx+" pos="+pos);
+				idx++;
+			}
+		}
+	}
 
 }

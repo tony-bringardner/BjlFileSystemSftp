@@ -3020,21 +3020,32 @@ public class ChannelSftp extends ChannelSession{
 			byte[] srcb=Util.str2byte(src, fEncoding);
 	
 			sendOPEN(srcb,SSH_FXF_READ | SSH_FXF_WRITE );
-	
+			buf.rewind();
 			Header header=new Header();
 			header=header(buf, header);
 			int length=header.length;
 			int type=header.type;
-	
+			buf.rewind();
 			fill(buf, length);
 	
 			if(type!=SSH_FXP_STATUS && type!=SSH_FXP_HANDLE){
 				throw new SftpException(SSH_FX_FAILURE, "");
 			}
+			
 			if(type==SSH_FXP_STATUS){
-				int i=buf.getInt();
-				throwStatusError(buf, i);
+				//int av = io_in.available();
+				buf.rewind();
+				header=header(buf, header);
+				length=header.length;
+				type=header.type;
+				buf.rewind();
+				fill(buf, length);
+				if( type != SSH_FXP_HANDLE) {
+					int i=buf.getInt();
+					throwStatusError(buf, i);
+				}
 			}
+			
 	
 			ret=buf.getString();         // handle
 	
@@ -3053,11 +3064,11 @@ public class ChannelSftp extends ChannelSession{
 		byte[] ret = null;
 		try {
 			sendREAD(handle, offset, length);
-
+			buf.rewind();
 			Header header = header(buf, new Header());
 			int rest_length = header.length;
 			int type=header.type;
-			int id=header.rid;
+			//int id=header.rid;
 
 
 			if(type!=SSH_FXP_STATUS && type!=SSH_FXP_DATA){ 
@@ -3074,12 +3085,13 @@ public class ChannelSftp extends ChannelSession{
 
 			buf.rewind();
 			fill(buf.buffer, 0, 4);
-			int len = buf.getInt(); 
+			int len = buf.getInt();
 			ret = new byte[len];
 			int got = io_in.read(ret);
 			while( got < len) {
 				got += io_in.read(ret,got,len-got);
 			}
+			
 			
 		} catch (Exception e) {
 			if (e instanceof IOException) {
@@ -3099,6 +3111,15 @@ public class ChannelSftp extends ChannelSession{
 			if( sent != data.length) {
 				throw new IOException("Only sent "+sent+" of "+data.length+" bytes");
 			}
+
+			buf.rewind();
+			Header header = new Header();
+			boolean ok = checkStatus(null, header);
+			
+			if( !ok ) {
+				throw new IOException("Bad status from write = "+header.type);
+			}
+			
 		} catch (Exception e) {
 			if (e instanceof IOException) {
 				IOException ioe = (IOException) e;
@@ -3112,7 +3133,12 @@ public class ChannelSftp extends ChannelSession{
 	
 	public void closeFile(byte [] handle) throws IOException {
 		try {
-			sendCLOSE(handle);
+			buf.rewind();
+			Header header=new Header();
+			boolean ok = _sendCLOSE(handle,header);
+			if( !ok ) {
+				throw new IOException("Can't close file");
+			}
 		} catch (Exception e) {
 			if (e instanceof IOException) {
 				IOException ioe = (IOException) e;
