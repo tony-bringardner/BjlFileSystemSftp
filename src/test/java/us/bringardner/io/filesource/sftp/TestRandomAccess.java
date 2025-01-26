@@ -21,9 +21,12 @@ import com.sshtools.common.files.AbstractFileFactory;
 import com.sshtools.common.files.direct.NioFileFactory.NioFileFactoryBuilder;
 import com.sshtools.common.permissions.PermissionDeniedException;
 import com.sshtools.common.policy.FileFactory;
+import com.sshtools.common.scp.ScpCommand.ScpCommandFactory;
 import com.sshtools.common.ssh.SshConnection;
+import com.sshtools.server.DefaultServerChannelFactory;
 import com.sshtools.server.InMemoryPasswordAuthenticator;
 import com.sshtools.server.SshServer;
+import com.sshtools.synergy.ssh.CompoundChannelFactory;
 
 import us.bringardner.io.filesource.FileSource;
 
@@ -35,6 +38,7 @@ public class TestRandomAccess {
 	static int port = 2222;
 	static String user = "foo";
 	static String password = "bar";
+	static String host = "localhost";
 	static int timeout = 5000;
 	private static String localTestFileDirPath;
 	private static String localCacheDirPath;
@@ -53,13 +57,15 @@ public class TestRandomAccess {
 		remoteTestFileDirPath = "target/SftpTest";
 
 		server = new SshServer(port);
+		
 		server.addAuthenticator(new InMemoryPasswordAuthenticator().addUser(user,password.toCharArray()));
+		//server.setChannelFactory(new CompoundChannelFactory<>());
 		server.setFileFactory(new FileFactory() {
 			@Override
 			public AbstractFileFactory<?> getFileFactory(SshConnection con) throws IOException, PermissionDeniedException {
 				return NioFileFactoryBuilder.create()
 						.withCurrentDirectoryAsHome()
-						//.withoutSandbox()
+						.withoutSandbox()
 						.build();
 			}
 		});
@@ -80,11 +86,17 @@ public class TestRandomAccess {
 		factory = new SftpFileSourceFactory();
 
 		Properties p = factory.getConnectProperties();
-
+		
+		user = "tony";
+		host = "bringardner.us";
+		password = "0000";
+		port = 22;
+		
+		
 		p.setProperty("user", user);
-		p.setProperty("host", "localhost");
+		p.setProperty("host", host);
 		p.setProperty("port", ""+port);
-		p.setProperty("password",password);
+		p.setProperty("password",""+password);
 		factory.setConnectionProperties(p);		
 
 		assertTrue(factory.connect(),"Factory did not start.");
@@ -155,14 +167,13 @@ public class TestRandomAccess {
 		
 		testFile = remoteDir.getChild("RamUnitTests.txt");
 		long len = testFile.length();
-		System.out.println("Enter testRandomcIo len="+len);
-		byte [] data = new byte[testData.length];
 		long pos = 0;
 		
 		// Read forward
 		try(SftpRandomAccessIoController ram = new SftpRandomAccessIoController((SftpFileSource) testFile)){
 			long l2 = ram.length();
 			assertEquals(len, l2,"Start lengths do not match");
+			ram.setLength(1000);
 			while(pos < l2) {
 				int idx = (int) (pos % testData.length);
 				int expect = testData[idx];
@@ -187,9 +198,7 @@ public class TestRandomAccess {
 				pos--;
 			}
 		}
-		
-		
-		System.out.println("Exit testRandomcIo");
+						
 	}
 
 
