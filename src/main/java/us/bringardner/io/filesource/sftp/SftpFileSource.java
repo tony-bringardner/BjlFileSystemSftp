@@ -409,8 +409,12 @@ public class SftpFileSource extends BaseObject implements FileSource {
 
 	@Override
 	public boolean createNewFile() throws IOException {
-		// not supported
-		return false;
+		if( !exists()) {
+			try(OutputStream out =  getOutputStream()) {
+				
+			}
+		}
+		return exists();
 	}
 
 	@Override
@@ -560,6 +564,7 @@ public class SftpFileSource extends BaseObject implements FileSource {
 	@Override
 	public synchronized  long length() throws IOException {
 		if( exists()) {
+			attr=null;
 			return getAttr().getSize();
 		} else {
 			return 0;

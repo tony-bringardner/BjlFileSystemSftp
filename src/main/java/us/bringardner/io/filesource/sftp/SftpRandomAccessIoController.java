@@ -14,14 +14,13 @@ public class SftpRandomAccessIoController  implements IRandomAccessIoController 
 	private SftpFileSource file ;
 	private SftpFileSourceFactory factory;
 	private ChannelSftp channel;
-	private byte[] handle;
+	private byte[] _handle;
 	private boolean closed;
 	private byte [] data;
 	public String dataString = "";
 	private long start;
 	private long end;
 	private int size;
-	private int chunkSize = 100;
 	private long maxWritePosition = -1;
 
 
@@ -37,7 +36,7 @@ public class SftpRandomAccessIoController  implements IRandomAccessIoController 
 			factory = (SftpFileSourceFactory) file.getFileSourceFactory();		
 			channel = (ChannelSftp) factory.getSession().openChannel("sftp");
 			channel.connect();
-			handle = channel.openFile(file.getAbsolutePath());
+			
 		} catch (JSchException e) {
 			throw new IOException(e);
 		}
@@ -48,8 +47,16 @@ public class SftpRandomAccessIoController  implements IRandomAccessIoController 
 	@Override
 	public void close() throws Exception {
 		save();
-		channel.closeFile(handle);
+		channel.closeFile(getHandle());
 		closed = true;		
+	}
+
+
+	private byte[] getHandle() throws IOException {
+		if( _handle == null ) {
+			_handle = channel.openFile(file.getAbsolutePath());
+		}
+		return _handle;
 	}
 
 
@@ -58,20 +65,22 @@ public class SftpRandomAccessIoController  implements IRandomAccessIoController 
 			save();
 		}
 		long len = length();
-		if( pos > len) {
+		int chunkSize = factory.getChunkSize();
+		if(len == 0 || pos >= len) {
 			size = 0;
 			data = new byte[chunkSize];
 			start = len;
+			
 		} else {
 			int chunk = (int)(pos/chunkSize);
 			start = chunk * chunkSize;
-			data = channel.readFileChunk(handle, start, chunkSize);
+			data = channel.readFileChunk(getHandle(), start, chunkSize);
 			size = data.length;
 			
 		}
 		dataString = new String(data);
-
-		end = start+size;
+		end = start+data.length;
+		
 		
 	}
 
@@ -103,6 +112,7 @@ public class SftpRandomAccessIoController  implements IRandomAccessIoController 
 		}
 		int offset = (int) (position - start);
 		data[offset] = value;
+		size = Math.max(size, offset+1);
 		maxWritePosition = Math.max(maxWritePosition, position);
 	}
 
@@ -143,9 +153,8 @@ public class SftpRandomAccessIoController  implements IRandomAccessIoController 
 		long delta = newLength-len;
 		byte [] data = new byte[(int)delta];
 		data = new byte[1];
-		data[0] = 'Z';
 		len = newLength;
-		channel.writeFileChunk(handle, newLength-1, data);
+		channel.writeFileChunk(getHandle(), newLength-1, data);
 	}
 
 
@@ -184,14 +193,14 @@ public class SftpRandomAccessIoController  implements IRandomAccessIoController 
 			if( size >= data.length) {
 				throw new IOException("Logic error size="+size+" data.len="+data.length);
 			}
-			int delta = size-data.length;
-			byte [] tmp = new byte[delta];
+			
+			byte [] tmp = new byte[size];
 			for (int idx = 0; idx < tmp.length; idx++) {
 				tmp[idx] = data[idx];
 			}
 			data = tmp;			
 		}
-		channel.writeFileChunk(handle, start, data);
+		channel.writeFileChunk(getHandle(), start, data);
 		maxWritePosition = -1;
 	}
 

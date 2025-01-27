@@ -126,6 +126,8 @@ public class SftpFileSourceFactory extends FileSourceFactory {
 	private FileSource[] roots;
 	private FileSource currentDir;
 
+	private int chunkSize=1024*4;
+
 	public SftpFileSourceFactory() {
 		super();
 	}
@@ -474,6 +476,14 @@ public class SftpFileSourceFactory extends FileSourceFactory {
 	@Override
 	public char getSeperatorChar() {
 		return '/';
+	}
+
+	public void setChunkSize(int chunk_size) {
+		this.chunkSize = chunk_size;;		
+	}
+	
+	public int getChunkSize() {
+		return chunkSize;
 	}
 
 

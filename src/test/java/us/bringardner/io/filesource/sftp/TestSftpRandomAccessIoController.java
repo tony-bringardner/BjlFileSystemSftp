@@ -36,7 +36,7 @@ import us.bringardner.io.filesource.FileSource;
 
 
 @TestMethodOrder(OrderAnnotation.class)
-public class TestRandomAccess {
+public class TestSftpRandomAccessIoController {
 	//https://jadaptive.com/java-ssh-library/maverick-synergy/creating-an-interactive-terminal/
 	static SshServer server;
 	static int port = 2222;
@@ -98,7 +98,9 @@ public class TestRandomAccess {
 		factory.setConnectionProperties(p);		
 
 		assertTrue(factory.connect(),"Factory did not start.");
-
+		
+		//  use a small chunk size to generate lot's of activity
+		factory.setChunkSize(100);
 
 	}
 
@@ -164,7 +166,7 @@ public class TestRandomAccess {
 		long pos = 0;
 
 		// Read forward
-		try(SftpRandomAccessIoController ram = new SftpRandomAccessIoController((SftpFileSource) testFile)){
+		try(MyIoController ram = new MyIoController((SftpFileSource) testFile)){
 			long l2 = ram.length();
 			assertEquals(len, l2,"Start lengths do not match");
 			while(pos < l2) {
@@ -178,7 +180,7 @@ public class TestRandomAccess {
 		// Read backwards
 
 		pos = testFile.length();
-		try(SftpRandomAccessIoController ram = new SftpRandomAccessIoController((SftpFileSource) testFile)){
+		try(MyIoController ram = new MyIoController((SftpFileSource) testFile)){
 			long l2 = ram.length();
 			assertEquals(len, l2,"Start lengths do not match");
 			pos = l2-1;
@@ -226,7 +228,7 @@ public class TestRandomAccess {
 		int targetChangeCount = 100;
 
 		//  randomly make changes
-		try(SftpRandomAccessIoController ram = new SftpRandomAccessIoController((SftpFileSource) testFile)){
+		try(MyIoController ram = new MyIoController((SftpFileSource) testFile)){
 			Random r = new Random();
 
 			for(int idx=0; idx < targetChangeCount; idx++ ) {
@@ -247,7 +249,7 @@ public class TestRandomAccess {
 		}
 
 		//  validate changes
-		try(SftpRandomAccessIoController ram = new SftpRandomAccessIoController((SftpFileSource) testFile)){
+		try(MyIoController ram = new MyIoController((SftpFileSource) testFile)){
 			int idx = 0;
 			for(Long pos : changes.keySet()) {
 				int expect = changes.get(pos);
