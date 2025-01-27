@@ -7,144 +7,64 @@ import com.jcraft.jsch.ChannelSftp;
 import com.jcraft.jsch.JSchException;
 
 import us.bringardner.io.filesource.FileSource;
-import us.bringardner.io.filesource.IRandomAccessIoController;
 
-public class SftpRandomAccessIoController  implements IRandomAccessIoController {
+public class SftpRandomAccessIoController extends AbstractRandomAccessIoController {
 
-	private SftpFileSource file ;
-	private SftpFileSourceFactory factory;
+	private SftpFileSourceFactory myFactory;
 	private ChannelSftp channel;
 	private byte[] _handle;
-	private boolean closed;
-	private byte [] data;
-	public String dataString = "";
-	private long start;
-	private long end;
-	private int size;
-	private long maxWritePosition = -1;
 
 
-
-	public static void main(String[] args) {
-
-	}
-
-
-	public SftpRandomAccessIoController(SftpFileSource file) throws IOException {
+	public SftpRandomAccessIoController(FileSource file) throws IOException {
+		super(file);
+		myFactory = (SftpFileSourceFactory) file.getFileSourceFactory();		
 		try {
-			this.file = file;
-			factory = (SftpFileSourceFactory) file.getFileSourceFactory();		
-			channel = (ChannelSftp) factory.getSession().openChannel("sftp");
+			channel = (ChannelSftp) myFactory.getSession().openChannel("sftp");
 			channel.connect();
-			
-		} catch (JSchException e) {
+		} catch (JSchException  e) {
 			throw new IOException(e);
 		}
+
 	}
 
-
-
+	String dataString="";
+	
 	@Override
-	public void close() throws Exception {
-		save();
-		channel.closeFile(getHandle());
-		closed = true;		
-	}
-
-
-	private byte[] getHandle() throws IOException {
-		if( _handle == null ) {
-			_handle = channel.openFile(file.getAbsolutePath());
-		}
-		return _handle;
-	}
-
-
-	private void readChunkForPos(long pos) throws IOException {
-		if( maxWritePosition >=0) {
-			save();
-		}
+	protected Chunk readChunkForPos(long pos) throws IOException {
+		Chunk ret = new Chunk();
 		long len = length();
-		int chunkSize = factory.getChunkSize();
+		int chunkSize = myFactory.getChunkSize();
 		if(len == 0 || pos >= len) {
-			size = 0;
-			data = new byte[chunkSize];
-			start = len;
-			
+			ret.size = 0;
+			ret.data = new byte[chunkSize];
+			ret.start = len;
+			ret.isNew = true;
 		} else {
 			int chunk = (int)(pos/chunkSize);
-			start = chunk * chunkSize;
-			data = channel.readFileChunk(getHandle(), start, chunkSize);
-			size = data.length;
-			
+			ret.start = chunk * chunkSize;
+			ret.data = channel.readFileChunk(getHandle(), ret.start, chunkSize);
+			ret.size = ret.data.length;			
 		}
-		dataString = new String(data);
-		end = start+data.length;
+		dataString = new String(ret.data);
 		
 		
-	}
-
-	@Override
-	public int read(long position) throws IOException {
-		int ret = -1;
-		if( !closed ) {
-			if( maxWritePosition>=0) {
-				save();
-			}
-
-			if(position< start || position>= end) {
-				readChunkForPos(position);
-			}
-			if( position < end) {
-				int offset = (int) (position-start);
-				ret = data[offset];
-			}
-		}
-
 		return ret;
 	}
 
-
 	@Override
-	public void write(long position, byte value) throws IOException {
-		if( position < start || position>=end) {
-			readChunkForPos(position);			
-		}
-		int offset = (int) (position - start);
-		data[offset] = value;
-		size = Math.max(size, offset+1);
-		maxWritePosition = Math.max(maxWritePosition, position);
+	protected void writeChunk(Chunk chunk) throws IOException {
+		channel.writeFileChunk(getHandle(), chunk.start, chunk.data);
+		
 	}
 
-
 	@Override
-	public long length() throws IOException {
-		long ret = 0;
-		file.refresh();
-		ret = file.length();
-
-		if( maxWritePosition >=0 && maxWritePosition> ret) {
-			ret = maxWritePosition;
-		}
-
-		return ret;
-	}
-
-
-	@Override
-	public void setLength(long newLength) throws IOException {
-		if(maxWritePosition>=0 ) {
-			save();
-		}
+	public void setLength0(long newLength) throws IOException {
 		if( newLength< length()) {
 			shrinkTo(newLength);
 		} else {
 			expandTo(newLength);
 		}
-
-
 	}
-
 
 	private void expandTo(long newLength) throws IOException {
 
@@ -162,14 +82,17 @@ public class SftpRandomAccessIoController  implements IRandomAccessIoController 
 		ChannelExec exec = null;
 
 		try {
-			exec = (ChannelExec) factory.getSession().openChannel("exec");
+			exec = (ChannelExec) myFactory.getSession().openChannel("exec");
 			String cmd = "truncate -s "+newLength+" "+file.getAbsolutePath();
 			exec.setCommand(cmd);	
 			exec.connect();
-
+			try {
+				Thread.sleep(100);
+			} catch (InterruptedException e) {
+			}
 			int status = exec.getExitStatus();
 			if( status != 0 ) {
-				throw new IOException("Server does not suppport this function");				
+				throw new IOException("Server does not support this function");				
 			}
 
 		} catch (JSchException e) {
@@ -185,29 +108,14 @@ public class SftpRandomAccessIoController  implements IRandomAccessIoController 
 
 
 	}
+	
 
-
-	@Override
-	public void save() throws IOException {
-		if( size != data.length) {
-			if( size >= data.length) {
-				throw new IOException("Logic error size="+size+" data.len="+data.length);
-			}
-			
-			byte [] tmp = new byte[size];
-			for (int idx = 0; idx < tmp.length; idx++) {
-				tmp[idx] = data[idx];
-			}
-			data = tmp;			
+	
+	private byte[] getHandle() throws IOException {
+		if( _handle == null ) {
+			_handle = channel.openFile(file.getAbsolutePath());
 		}
-		channel.writeFileChunk(getHandle(), start, data);
-		maxWritePosition = -1;
-	}
-
-
-	@Override
-	public FileSource getFile() {		
-		return file;
+		return _handle;
 	}
 
 }

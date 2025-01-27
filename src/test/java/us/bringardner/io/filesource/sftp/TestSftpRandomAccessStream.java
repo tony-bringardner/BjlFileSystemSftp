@@ -160,7 +160,7 @@ public class TestSftpRandomAccessStream {
 
 		try (FileSourceRandomAccessStream ram = 
 				new FileSourceRandomAccessStream(
-						new MyIoController(file), 
+						new SftpRandomAccessIoController(file), 
 						"r")){
 			assertTrue(false,"should generate an error opening a non existed file for read");
 		} catch (Exception e) {
@@ -169,7 +169,7 @@ public class TestSftpRandomAccessStream {
 
 		StringBuilder buf = new StringBuilder();
 
-		try(FileSourceRandomAccessStream ram = new FileSourceRandomAccessStream(new MyIoController(file), "rw")) {
+		try(FileSourceRandomAccessStream ram = new FileSourceRandomAccessStream(new SftpRandomAccessIoController(file), "rw")) {
 			assertTrue(file.exists(),"should create a new file when opening a non existed file for rw");
 			while(
 					ram.length()
@@ -184,7 +184,7 @@ public class TestSftpRandomAccessStream {
 
 
 		byte buffer [] = new byte[(int)file.length()];
-		try(FileSourceRandomAccessStream ram = new FileSourceRandomAccessStream(new MyIoController(file), "rw")) {
+		try(FileSourceRandomAccessStream ram = new FileSourceRandomAccessStream(new SftpRandomAccessIoController(file), "rw")) {
 			ram.readFully(buffer);
 		}
 
@@ -204,7 +204,7 @@ public class TestSftpRandomAccessStream {
 	public void testSeekAndRead() throws IOException {
 		int len = (int)file.length();
 
-		try(FileSourceRandomAccessStream ram = new FileSourceRandomAccessStream(new MyIoController(file), "rw")) {
+		try(FileSourceRandomAccessStream ram = new FileSourceRandomAccessStream(new SftpRandomAccessIoController(file), "rw")) {
 			for(int idx = 0; idx<len; idx++) {
 				int pos = idx % testData.length;
 				int expect = testData[pos];				
@@ -224,7 +224,7 @@ public class TestSftpRandomAccessStream {
 
 		}
 
-		try(FileSourceRandomAccessStream ram = new FileSourceRandomAccessStream(new MyIoController(file), "rw")) {
+		try(FileSourceRandomAccessStream ram = new FileSourceRandomAccessStream(new SftpRandomAccessIoController(file), "rw")) {
 			int tries = 0;
 			Random r = new Random();
 			int targetTries = 1000;
@@ -247,7 +247,7 @@ public class TestSftpRandomAccessStream {
 		int len = (int)file.length();
 		assertTrue(len > 0," Test file is empty" );
 
-		try(FileSourceRandomAccessStream ram = new FileSourceRandomAccessStream(new MyIoController(file), "rw")) {
+		try(FileSourceRandomAccessStream ram = new FileSourceRandomAccessStream(new SftpRandomAccessIoController(file), "rw")) {
 			ram.setLength(len*2);
 			assertEquals(len*2,file.length(),"Wrong value set len to *2" );
 			try {
@@ -280,7 +280,7 @@ public class TestSftpRandomAccessStream {
 
 		// make both file the same
 		try(RandomAccessFile jram = new RandomAccessFile(jfile, "rw")){
-			try(FileSourceRandomAccessStream ram = new FileSourceRandomAccessStream(new MyIoController(file), "rw")) {
+			try(FileSourceRandomAccessStream ram = new FileSourceRandomAccessStream(new SftpRandomAccessIoController(file), "rw")) {
 				int cnt = 0;
 				while(cnt < targetFileSize){
 					jram.write(testData);
@@ -358,7 +358,7 @@ public class TestSftpRandomAccessStream {
 		byte [] jdata = new byte[testData.length];
 
 		try(RandomAccessFile jram = new RandomAccessFile(jfile, "rw")){
-			try(FileSourceRandomAccessStream ram = new FileSourceRandomAccessStream(new MyIoController(file), "rw")) {
+			try(FileSourceRandomAccessStream ram = new FileSourceRandomAccessStream(new SftpRandomAccessIoController(file), "rw")) {
 
 				@SuppressWarnings("unused")
 				Action last = null;
@@ -440,7 +440,7 @@ public class TestSftpRandomAccessStream {
 		List<Entry> list = new ArrayList<>();
 
 		try(RandomAccessFile jram = new RandomAccessFile(jfile, "rw")){
-			try(FileSourceRandomAccessStream ram = new FileSourceRandomAccessStream(new MyIoController(file), "rw")) {
+			try(FileSourceRandomAccessStream ram = new FileSourceRandomAccessStream(new SftpRandomAccessIoController(file), "rw")) {
 
 				int actions = 50;
 				while((--actions) >= 0) {

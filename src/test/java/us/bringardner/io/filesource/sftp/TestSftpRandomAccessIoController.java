@@ -166,7 +166,7 @@ public class TestSftpRandomAccessIoController {
 		long pos = 0;
 
 		// Read forward
-		try(MyIoController ram = new MyIoController((SftpFileSource) testFile)){
+		try(SftpRandomAccessIoController ram = new SftpRandomAccessIoController((SftpFileSource) testFile)){
 			long l2 = ram.length();
 			assertEquals(len, l2,"Start lengths do not match");
 			while(pos < l2) {
@@ -180,7 +180,7 @@ public class TestSftpRandomAccessIoController {
 		// Read backwards
 
 		pos = testFile.length();
-		try(MyIoController ram = new MyIoController((SftpFileSource) testFile)){
+		try(SftpRandomAccessIoController ram = new SftpRandomAccessIoController((SftpFileSource) testFile)){
 			long l2 = ram.length();
 			assertEquals(len, l2,"Start lengths do not match");
 			pos = l2-1;
@@ -228,7 +228,7 @@ public class TestSftpRandomAccessIoController {
 		int targetChangeCount = 100;
 
 		//  randomly make changes
-		try(MyIoController ram = new MyIoController((SftpFileSource) testFile)){
+		try(SftpRandomAccessIoController ram = new SftpRandomAccessIoController((SftpFileSource) testFile)){
 			Random r = new Random();
 
 			for(int idx=0; idx < targetChangeCount; idx++ ) {
@@ -249,7 +249,7 @@ public class TestSftpRandomAccessIoController {
 		}
 
 		//  validate changes
-		try(MyIoController ram = new MyIoController((SftpFileSource) testFile)){
+		try(SftpRandomAccessIoController ram = new SftpRandomAccessIoController((SftpFileSource) testFile)){
 			int idx = 0;
 			for(Long pos : changes.keySet()) {
 				int expect = changes.get(pos);
