@@ -105,8 +105,10 @@ public abstract class AbstractRandomAccessIoController implements IRandomAccessI
 
 		int ret = -1;
 		if( !closed ) {
-			if(currentChunk == null || !currentChunk. contains(pos)) {
+			if(currentChunk == null || 
+					!currentChunk. contains(pos)) {
 				// find and load data
+				System.out.println("");
 				loadChunkFor(pos);
 
 			}
@@ -237,6 +239,8 @@ public abstract class AbstractRandomAccessIoController implements IRandomAccessI
 			save();
 		}
 		setLength0(newLength);
+		// force reload of next chunk
+		currentChunk = null;
 	}
 
 

@@ -2123,6 +2123,32 @@ public class ChannelSftp extends ChannelSession{
 			throw new SftpException(SSH_FX_FAILURE, "");
 		}
 	}
+	
+	public void setAtime(String path, int atime) throws SftpException{
+		try{
+			((MyPipedInputStream)io_in).updateReadSide();
+
+			path=remoteAbsolutePath(path);
+
+			Vector v=glob_remote(path);
+			int vsize=v.size();
+			for(int j=0; j<vsize; j++){
+				path=(String)(v.elementAt(j));
+
+				SftpATTRS attr=_stat(path);
+
+				attr.setFLAGS(0);
+				attr.setACMODTIME(atime, attr.getMTime());
+				_setStat(path, attr);
+			}
+		}
+		catch(Exception e){
+			if(e instanceof SftpException) throw (SftpException)e;
+			if(e instanceof Throwable)
+				throw new SftpException(SSH_FX_FAILURE, "", (Throwable)e);
+			throw new SftpException(SSH_FX_FAILURE, "");
+		}
+	}
 
 	public void rmdir(String path) throws SftpException{
 		try{

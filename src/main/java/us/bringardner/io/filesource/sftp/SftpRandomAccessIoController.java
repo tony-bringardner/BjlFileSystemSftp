@@ -28,7 +28,7 @@ public class SftpRandomAccessIoController extends AbstractRandomAccessIoControll
 	}
 
 	String dataString="";
-	
+
 	@Override
 	protected Chunk readChunkForPos(long pos) throws IOException {
 		Chunk ret = new Chunk();
@@ -46,30 +46,33 @@ public class SftpRandomAccessIoController extends AbstractRandomAccessIoControll
 			ret.size = ret.data.length;			
 		}
 		dataString = new String(ret.data);
-		
-		
+
+
 		return ret;
 	}
 
 	@Override
 	protected void writeChunk(Chunk chunk) throws IOException {
 		channel.writeFileChunk(getHandle(), chunk.start, chunk.data);
-		
+
 	}
 
 	@Override
 	public void setLength0(long newLength) throws IOException {
-		if( newLength< length()) {
-			shrinkTo(newLength);
-		} else {
-			expandTo(newLength);
+		long len = length();
+		if( len != newLength) {
+			if( newLength< length()) {
+				shrinkTo(newLength);
+			} else {
+				expandTo(newLength);
+			}
 		}
 	}
 
 	private void expandTo(long newLength) throws IOException {
 
 		long len = length();
-		
+
 		long delta = newLength-len;
 		byte [] data = new byte[(int)delta];
 		data = new byte[1];
@@ -108,9 +111,9 @@ public class SftpRandomAccessIoController extends AbstractRandomAccessIoControll
 
 
 	}
-	
 
-	
+
+
 	private byte[] getHandle() throws IOException {
 		if( _handle == null ) {
 			_handle = channel.openFile(file.getAbsolutePath());

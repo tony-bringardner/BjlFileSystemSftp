@@ -27,6 +27,7 @@ package us.bringardner.io.filesource.sftp;
 
 import java.awt.Component;
 import java.io.IOException;
+import java.io.InputStream;
 import java.net.URL;
 import java.nio.file.attribute.PosixFilePermission;
 import java.util.HashMap;
@@ -34,6 +35,7 @@ import java.util.Map;
 import java.util.Properties;
 import java.util.Vector;
 
+import com.jcraft.jsch.ChannelExec;
 import com.jcraft.jsch.ChannelSftp;
 import com.jcraft.jsch.JSch;
 import com.jcraft.jsch.JSchException;
@@ -43,6 +45,7 @@ import com.jcraft.jsch.SftpException;
 
 import us.bringardner.io.filesource.FileSource;
 import us.bringardner.io.filesource.FileSourceFactory;
+import us.bringardner.io.filesource.FileSourceUser;
 
 public class SftpFileSourceFactory extends FileSourceFactory {
 
@@ -131,7 +134,7 @@ public class SftpFileSourceFactory extends FileSourceFactory {
 	public SftpFileSourceFactory() {
 		super();
 	}
-	
+
 	public String getPrivateKeyFileName() {
 		return privateKeyFileName;
 	}
@@ -214,20 +217,20 @@ public class SftpFileSourceFactory extends FileSourceFactory {
 
 	public FileSource createFileSource(String path) throws IOException {
 		connect();
-		
-		
+
+
 		if( getCurrentDirectory() != null && !path.startsWith("/")) {
 			FileSource file = getCurrentDirectory();
 			return file.getChild(path);
 		}
-		
+
 		return new SftpFileSource(this, path); 
 	}
 
 	public void setRoot(String path) {
-		
+
 	}
-	
+
 	@Override
 	public FileSource[] listRoots() throws IOException {
 		if( roots == null ) {
@@ -260,7 +263,7 @@ public class SftpFileSourceFactory extends FileSourceFactory {
 		if( ret == null ) {
 			ret = getUser()+"@"+getHost()+":"+getPort();
 		}
-		
+
 		return ret;
 	}
 
@@ -357,7 +360,7 @@ public class SftpFileSourceFactory extends FileSourceFactory {
 		ret.setProperty(PROP_PRIVATE_KEY_FILE_NAME, privateKeyFileName == null ? "":privateKeyFileName);
 		ret.setProperty(PROP_PRIVATE_KEY, privateKey == null ? "":new String(privateKey));
 		ret.setProperty(PROP_SESSION_KEY, sessionKey == null ? "":sessionKey);
-		
+
 		return ret;
 	}
 
@@ -370,12 +373,12 @@ public class SftpFileSourceFactory extends FileSourceFactory {
 		String auth = url.getAuthority();
 
 
-		
+
 		if( auth == null ) {
 			if( sessions.size() > 0) {
-				
+
 				String key = sessionKey;
-				
+
 				// if we have a session key , connect will be ok.
 				if( key == null ) {
 					key = getConnectProperties().getProperty(PROP_SESSION_KEY);
@@ -383,13 +386,13 @@ public class SftpFileSourceFactory extends FileSourceFactory {
 						if( sessions.size() > 1) {
 							throw new RuntimeException("URL has no authority and there are tooo many open sessions to pick from");
 						}
-						
+
 						for(String k : sessions.keySet()) {
-							 sessionKey = k;
-							 return;
+							sessionKey = k;
+							return;
 						}
 					}
-					
+
 				}
 			}
 		} else {
@@ -424,7 +427,7 @@ public class SftpFileSourceFactory extends FileSourceFactory {
 		} else {
 			privateKey = null;
 		}
-		
+
 	}
 
 	@Override
@@ -481,10 +484,86 @@ public class SftpFileSourceFactory extends FileSourceFactory {
 	public void setChunkSize(int chunk_size) {
 		this.chunkSize = chunk_size;;		
 	}
-	
+
 	public int getChunkSize() {
 		return chunkSize;
 	}
+
+
+	FileSourceUser remotePrinciple;
+	@Override
+	public FileSourceUser whoAmI() {
+		if( remotePrinciple !=null ) {
+			return remotePrinciple;
+		}
+
+		if( isConnected()) {
+			try {
+				String tmp = runCommand("id");
+				FileSourceUser p = FileSourceUser.fromId(tmp);
+				if( p !=null ) {
+					remotePrinciple = p;
+					return p;
+				}
+			} catch (IOException e) {
+			}
+		}
+
+		return super.whoAmI();
+	}
+
+	public String runCommand(String command) throws IOException {
+		String ret = null;
+		if( isConnected()) {
+			ChannelExec execChannel = null;
+			try {
+				execChannel = (ChannelExec) getSession().openChannel("exec");
+				execChannel.setCommand(command);
+				InputStream stdOut = execChannel.getInputStream() ;
+				InputStream stdErr = execChannel.getErrStream();
+				execChannel.connect();
+				StringBuilder output = new StringBuilder();
+				byte[] buffer = new byte[1024];
+				int read;
+				while ( ( read = stdOut.read( buffer, 0, buffer.length ) ) >= 0 ) {
+					for (int idx = 0; idx < read; idx++) {
+						output.append((char)buffer[idx]);
+					}
+				}
+				stdOut.close();
+				while ( ( read = stdErr.read( buffer, 0, buffer.length ) ) >= 0 ) {
+					for (int idx = 0; idx < read; idx++) {
+						output.append((char)buffer[idx]);
+					}
+				}
+				stdErr.close();
+
+				long start = System.currentTimeMillis();
+				while(!execChannel.isClosed() && (System.currentTimeMillis()-start)< 2000) {
+					try {
+						Thread.sleep(10);
+					} catch (InterruptedException e) {
+					}
+				}
+				int status = execChannel.getExitStatus();
+				if( status != 0) {
+					throw new IOException("status="+status+" ("+output+")");
+				}
+				ret = output.toString();
+			} catch (JSchException  e) {
+				throw new IOException(e);
+			} finally {
+				if( execChannel !=null) {
+					try {
+						execChannel.disconnect();
+					} catch (Exception e2) {
+					}
+				}
+			}
+		}
+		return ret;
+	}
+
 
 
 }

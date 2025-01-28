@@ -50,6 +50,8 @@ import us.bringardner.core.BaseObject;
 import us.bringardner.io.filesource.FileSource;
 import us.bringardner.io.filesource.FileSourceFactory;
 import us.bringardner.io.filesource.FileSourceFilter;
+import us.bringardner.io.filesource.FileSourceGroup;
+import us.bringardner.io.filesource.FileSourceUser;
 import us.bringardner.io.filesource.ISeekableInputStream;
 import us.bringardner.io.filesource.fileproxy.FileProxy;
 
@@ -227,8 +229,8 @@ public class SftpFileSource extends BaseObject implements FileSource {
 
 	private SftpFileSource parent;
 	private FileSource linkedTo;
-	private UserPrincipal owner;
-	private GroupPrincipal group;
+	private FileSourceUser owner;
+	private FileSourceGroup group;
 
 	/**
 	 * Construct a new SftpFileSource from 'factory' 
@@ -353,23 +355,13 @@ public class SftpFileSource extends BaseObject implements FileSource {
 	}
 
 	@Override
-	public boolean canRead() throws IOException {
+	public boolean canOwnerRead() throws IOException {
 		return (getAttr().getPermissionsString().charAt(1) == 'r');//-rw-r--r--;
 	}
 
 	@Override
-	public boolean canWrite() throws IOException {
-		return (getAttr().getPermissionsString().charAt(2) == 'w');//-rw-r--r--;
-	}
-
-	@Override
-	public boolean canOwnerRead() throws IOException {
-		return canRead();
-	}
-
-	@Override
 	public boolean canOwnerWrite() throws IOException {
-		return canWrite();
+		return (getAttr().getPermissionsString().charAt(2) == 'w');//-rw-r--r--;
 	}
 
 	@Override
@@ -411,7 +403,7 @@ public class SftpFileSource extends BaseObject implements FileSource {
 	public boolean createNewFile() throws IOException {
 		if( !exists()) {
 			try(OutputStream out =  getOutputStream()) {
-				
+
 			}
 		}
 		return exists();
@@ -449,7 +441,7 @@ public class SftpFileSource extends BaseObject implements FileSource {
 		}
 		tmp[kids.length] = child;
 		kids = tmp;
-		*/
+		 */
 	}
 
 	private SftpFileSource findChild(String name) throws IOException {
@@ -655,7 +647,7 @@ public class SftpFileSource extends BaseObject implements FileSource {
 	public synchronized  boolean renameTo(FileSource dest) throws IOException {
 		String myName = getCanonicalPath();
 		String yourName = dest.getCanonicalPath();
-	
+
 		boolean ret = false;
 		if(exists() && 
 				!dest.exists()				
@@ -684,14 +676,17 @@ public class SftpFileSource extends BaseObject implements FileSource {
 
 	@Override
 	public synchronized  boolean setLastModifiedTime(long time) throws IOException {
+		boolean ret = false;
 		try {
-			factory.getSftp_().setMtime(path, (int) (time / 1000));
+			int time2 = ((int)time/1000);
+			factory.getSftp_().setMtime(path, time2);
 			attr = null;
-			getAttr();
-			return true;
+			ret = getAttr().getMTime()==time2;
+			
 		} catch (SftpException e) {
-			return false;
+			throw new IOException(e);
 		}
+		return ret;
 	}
 
 	@Override
@@ -838,7 +833,7 @@ public class SftpFileSource extends BaseObject implements FileSource {
 
 	@Override
 	public FileSource[] listFiles(ProgressMonitor progress) throws IOException {
-		throw new RuntimeException("list witH monitor not implimented"); 
+		throw new RuntimeException("list with monitor not implimented"); 
 	}
 
 	@Override
@@ -871,21 +866,45 @@ public class SftpFileSource extends BaseObject implements FileSource {
 		throw new IOException("ISeekableInputStream not implemented");
 	}
 
+	FileSourceUser principle;
+	
+	private FileSourceUser getPrinciple() {
+		
+		if( principle == null && factory.isConnected() ) {
+			try {
+				// we need the user and group names
+				Vector<LsEntry> e1 = factory.ls(getAbsolutePath());
+				if( e1 !=null && e1.size()>0) {
+					LsEntry e = e1.get(0);
+					String tmp = e.toString();
+					while(tmp.indexOf("  ")>0) {
+						tmp = tmp.replaceAll("  ", " ");
+					}
+
+					String [] parts = tmp.split("\\s");
+					if( parts.length>=4) {
+						String user = parts[2];
+						String groupName = parts[3];
+						SftpATTRS a = getAttr();
+						FileSourceUser p = new FileSourceUser(a.getUId(),user,a.getGId(),groupName);
+						principle = p;
+					}
+				}
+
+			} catch (Throwable e) {
+				//TODO: what to do
+				e.printStackTrace();
+			}
+		}
+		return principle;
+	}
 
 	@Override
-	public UserPrincipal getOwner() throws IOException {
+	public FileSourceUser getOwner() throws IOException {
+
 		if(owner == null ) {
 			synchronized (this) {
-				owner = new UserPrincipal() {
-					@Override
-					public String getName() {
-						try {
-							return ""+getAttr().getUId();
-						} catch (IOException e) {
-							return "UnKNown";
-						}
-					}
-				};
+				owner = getPrinciple();
 			}
 		}
 
@@ -897,16 +916,7 @@ public class SftpFileSource extends BaseObject implements FileSource {
 		if( group == null ) {
 			synchronized (this) {
 				if( group == null ) {
-					group = new GroupPrincipal() {
-						@Override
-						public String getName() {
-							try {
-								return ""+getAttr().getGId();
-							} catch (IOException e) {
-								return "UnKNown";
-							}
-						}
-					};
+					group = getOwner().getGroup();
 				}
 			}
 		}
@@ -1187,8 +1197,17 @@ public class SftpFileSource extends BaseObject implements FileSource {
 
 	@Override
 	public boolean setLastAccessTime(long time) throws IOException {
-		// TODO Auto-generated method stub
-		return false;
+		boolean ret = false;
+		try {
+			int time2 = ((int)time/1000);
+			factory.getSftp_().setAtime(getAbsolutePath(), time2);			
+			attr = null;
+			ret = getAttr().getATime() == time2;;
+		} catch (SftpException  e) {
+			throw new IOException(e);
+		}
+		
+		return ret;
 	}
 
 	@Override
@@ -1199,13 +1218,29 @@ public class SftpFileSource extends BaseObject implements FileSource {
 
 	@Override
 	public boolean setGroup(GroupPrincipal group) throws IOException {
-		// TODO Auto-generated method stub
+		if (group instanceof FileSourceGroup) {
+			int gid =  ((FileSourceGroup) group).getId();
+			try {
+				factory.getSftp_().chgrp(gid, getAbsolutePath());
+				return true;
+			} catch (SftpException e) {
+				throw new IOException(e);
+			} 
+		}
 		return false;
 	}
 
 	@Override
 	public boolean setOwner(UserPrincipal owner) throws IOException {
-		// TODO Auto-generated method stub
+		if (owner instanceof FileSourceUser) {
+			int uid = ((FileSourceUser) owner).getId();
+			try {
+				factory.getSftp_().chown(uid, getAbsolutePath());
+				return true;
+			} catch (SftpException e) {
+				throw new IOException(e);
+			}
+		}
 		return false;
 	}
 
