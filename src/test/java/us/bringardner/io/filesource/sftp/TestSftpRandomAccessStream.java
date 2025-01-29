@@ -1,3 +1,28 @@
+/**
+ * <PRE>
+ * 
+ * Copyright Tony Bringarder 1998, 2025 <A href="http://bringardner.com/tony">Tony Bringardner</A>
+ * 
+ *
+ *   Licensed under the Apache License, Version 2.0 (the "License");
+ *   you may not use this file except in compliance with the License.
+ *   You may obtain a copy of the License at
+ *
+ *       <A href="http://www.apache.org/licenses/LICENSE-2.0">http://www.apache.org/licenses/LICENSE-2.0</A>
+ *
+ *   Unless required by applicable law or agreed to in writing, software
+ *   distributed under the License is distributed on an "AS IS" BASIS,
+ *   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ *   See the License for the specific language governing permissions and
+ *   limitations under the License.
+ *  </PRE>
+ *   
+ *   
+ *	@author Tony Bringardner   
+ *
+ *
+ * ~version~
+ */
 package us.bringardner.io.filesource.sftp;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -22,7 +47,21 @@ import us.bringardner.io.filesource.FileSource;
 import us.bringardner.io.filesource.FileSourceRandomAccessStream;
 
 
-
+/**
+ * IRandomAccessStream is an interface that defines a random access file.  
+ * It is intended to to reproduce java.io.RandomAccessFile
+ * The implementation is divided into a logic layer and a data management layer (IRandomAccessIoController)
+ * 
+ * The implementation is divided into three parts;
+ * 
+ * 
+ * 1)	File pointer management done by FileSourceRandomAccessStream
+ * 2)	Functional implementation done by AbstractRandomAccessStream
+ * 			functions like readDouble,writeDouble,...
+ * 3)	Data manipulation: most of the work is done by AbstractRandomAccessIoController
+ * 			with the help of a FileSourceFactory specific worker, SftpRandomAccessIoController. 
+ * 
+ */
 
 @TestMethodOrder(OrderAnnotation.class)
 public class TestSftpRandomAccessStream {

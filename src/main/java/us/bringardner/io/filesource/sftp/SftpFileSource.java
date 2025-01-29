@@ -1221,7 +1221,10 @@ public class SftpFileSource extends BaseObject implements FileSource {
 		if (group instanceof FileSourceGroup) {
 			int gid =  ((FileSourceGroup) group).getId();
 			try {
-				factory.getSftp_().chgrp(gid, getAbsolutePath());
+				factory.getSftp_().
+				chgrp(gid, 
+						getAbsolutePath()
+						);
 				return true;
 			} catch (SftpException e) {
 				throw new IOException(e);
