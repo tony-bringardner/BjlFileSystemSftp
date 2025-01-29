@@ -32,6 +32,7 @@ import com.jcraft.jsch.ChannelExec;
 import com.jcraft.jsch.ChannelSftp;
 import com.jcraft.jsch.JSchException;
 
+import us.bringardner.io.filesource.AbstractRandomAccessIoController;
 import us.bringardner.io.filesource.FileSource;
 
 public class SftpRandomAccessIoController extends AbstractRandomAccessIoController {
