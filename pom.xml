@@ -104,7 +104,7 @@
 
 
 		<!--
-		https://mvnrepository.com/artifact/com.sshtools/maverick-synergy-server --> 
+		https://mvnrepository.com/artifact/com.sshtools/maverick-synergy-server -->
 		<dependency>
 			<groupId>com.sshtools</groupId>
 			<artifactId>maverick-synergy-server</artifactId>
@@ -130,7 +130,7 @@
 			<artifactId>sshd-core</artifactId>
 			<version>2.5.1</version>
 		</dependency> 
-		--> 
+		-->
 		<!-- https://mvnrepository.com/artifact/org.apache.sshd/sshd-mina 
 <dependency>
     <groupId>org.apache.sshd</groupId>
