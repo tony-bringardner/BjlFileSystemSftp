@@ -284,18 +284,23 @@ public class SftpFileSource extends BaseObject implements FileSource {
 		this.exists = (true);
 	}
 
-	private synchronized SftpFileSource[] getKids() throws IOException {
+	private synchronized SftpFileSource[] getKids(ProgressMonitor monitor) throws IOException {
+		if( monitor != null) monitor.setProgress(0);
 		if( kids == null ) {
 			List<FileSource> list = new ArrayList<FileSource>();
 			if( !isFile() ) {
 				// if it's not a file it may be a directory or a new / non existing entry
 				try {
 					Vector<LsEntry> ls = factory.ls(path);
+					int cnt = 0;
 					for (LsEntry e : ls) {
+						cnt++;
+						
 						//System.out.println("name ="+e.getFilename());
 						if( ! (e.getFilename().equals(".") || e.getFilename().equals(".."))) {
 							list.add(new SftpFileSource(factory, this,e));
 						}
+						if( monitor != null) monitor.setProgress((cnt/ls.size())*monitor.getMaximum());
 					}
 				} catch (SftpException e) {
 					if( e.getMessage().equals("No such file") || e.getMessage().endsWith("not a valid file path")) {
@@ -307,7 +312,8 @@ public class SftpFileSource extends BaseObject implements FileSource {
 				kids = list.toArray(new SftpFileSource[list.size()]);
 			}
 		}
-
+		
+		if( monitor != null) monitor.setProgress(monitor.getMaximum());
 		return kids;
 	}
 
@@ -446,7 +452,7 @@ public class SftpFileSource extends BaseObject implements FileSource {
 
 	private SftpFileSource findChild(String name) throws IOException {
 		SftpFileSource ret = null;
-		for (SftpFileSource f : getKids()) {
+		for (SftpFileSource f : getKids(null)) {
 			if( f.getName().equals(name) ) {
 				ret = f;
 				break;
@@ -596,7 +602,7 @@ public class SftpFileSource extends BaseObject implements FileSource {
 
 	@Override
 	public  synchronized FileSource[] listFiles() throws IOException {
-		return getKids();
+		return getKids(null);
 	}
 
 	@Override
@@ -833,7 +839,7 @@ public class SftpFileSource extends BaseObject implements FileSource {
 
 	@Override
 	public FileSource[] listFiles(ProgressMonitor progress) throws IOException {
-		throw new RuntimeException("list with monitor not implimented"); 
+		return getKids(progress);
 	}
 
 	@Override
@@ -892,11 +898,11 @@ public class SftpFileSource extends BaseObject implements FileSource {
 				}
 
 			} catch (Throwable e) {
-				//TODO: what to do
-				e.printStackTrace();
+				
 			}
 		}
-		return principle;
+		
+		return principle != null ? principle : new FileSourceUser();
 	}
 
 	@Override
