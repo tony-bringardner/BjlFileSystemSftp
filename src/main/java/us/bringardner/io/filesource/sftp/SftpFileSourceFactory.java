@@ -440,7 +440,7 @@ public class SftpFileSourceFactory extends FileSourceFactory {
 		return FACTORY_ID+"://"+session.getUserName()+":"+getPassword()+"@"+getHost()+":"+getPort();
 	}
 
-	@SuppressWarnings("unchecked")
+	
 	public synchronized Vector<ChannelSftp.LsEntry> ls(String path) throws IOException, SftpException {
 		return getSftp_().ls(path);
 	}

@@ -106,7 +106,7 @@ public class SftpPropertyEditPanel extends JPanel implements IConnectionProperti
 		
 		setLayout(new BorderLayout());
 		
-		setPreferredSize(new Dimension(780, 400));
+		setPreferredSize(new Dimension(1112, 480));
 		
 		//setBounds(0, 0, 752, 934);
 		JPanel northPanel = new JPanel();
@@ -127,7 +127,7 @@ public class SftpPropertyEditPanel extends JPanel implements IConnectionProperti
 		
 		userTextField = new JTextField();
 		userPanel.add(userTextField);
-		userTextField.setText("tony-tony");
+		userTextField.setText("unittest1");
 		userTextField.setColumns(10);
 		
 		hostPortPanel = new JPanel();
@@ -140,7 +140,7 @@ public class SftpPropertyEditPanel extends JPanel implements IConnectionProperti
 		
 		hostTextField = new JTextField();
 		hostPortPanel.add(hostTextField);
-		hostTextField.setText("ec2-54-69-95-39.us-west-2.compute.amazonaws.com");
+		hostTextField.setText("localhost");
 		hostTextField.setColumns(30);
 		
 		JLabel lblNewLabel_4 = new JLabel("Port");
