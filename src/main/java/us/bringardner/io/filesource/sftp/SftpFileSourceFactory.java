@@ -564,6 +564,30 @@ public class SftpFileSourceFactory extends FileSourceFactory {
 		return ret;
 	}
 
+	@Override
+	public FileSource createSymbolicLink(FileSource newFileLink, FileSource existingFile) throws IOException {
+		try {
+			getSftp_().symlink(existingFile.getAbsolutePath(), newFileLink.getAbsolutePath());
+			existingFile.refresh();
+			newFileLink.refresh();
+		} catch (SftpException e) {
+			throw new IOException(e);
+		} ;
+		return newFileLink;
+	}
+
+	@Override
+	public FileSource createLink(FileSource newFileLink, FileSource existingFile) throws IOException {
+		try {
+			getSftp_().hardlink(existingFile.getAbsolutePath(), newFileLink.getAbsolutePath());
+			existingFile.refresh();
+			newFileLink.refresh();
+		} catch (SftpException e) {
+			throw new IOException(e);
+		} ;
+		return newFileLink;
+	}
+
 
 
 }
