@@ -128,6 +128,7 @@ public class TestSftpPermissions {
 
 		factory1.disConnect();
 		factory2.disConnect();
+		factory3.disConnect();
 
 	}
 
