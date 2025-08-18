@@ -279,7 +279,12 @@ public class SftpFileSource extends BaseObject implements FileSource {
 		this.parent = parent;
 		this.name = entry.getFilename();
 		this.attr = entry.getAttrs();
-		this.path = parent.path+"/"+this.name;
+		if( parent.path.equals("/")) {
+			this.path = "/"+this.name;
+		} else {
+			this.path = parent.path+"/"+this.name;
+		}
+		
 		//  We have a list entry so this file MUST exists.
 		this.exists = (true);
 	}
@@ -336,9 +341,89 @@ public class SftpFileSource extends BaseObject implements FileSource {
 		}
 		return attr;
 	}
+	
+	/**
+	 * Tests whether the application can execute the file denoted by this abstract pathname. 
+	 * This is only here for comparability with java.io.File.  
+	 * 
+	 * @return
+	 * @throws IOException 
+	 * 
+	 */
+	@Override
+	public boolean canExecute() throws IOException {
+		try {
+
+			FileSourceUser me = getFileSourceFactory().whoAmI();
+			attr = getAttr();
+			if( me.getId()==attr.getUId()) {
+				return canOwnerExecute();
+			}
+			if( me.hasGroup(attr.getGId())) {
+				return canGroupExecute();
+			}						
+			return canOtherExecute();
+			
+		} catch (Exception e) {
+		}
+		return false;
+	}
 
 
+	/**
+	 * Tests whether the application can read the 
+	 * file denoted by this abstract pathname.
+	 * This is only here for comparability with java.io.File.  
+	 * 
+	 * @return true if and only if the file system actually contains a file denoted by this abstract pathname 
+	 * 	and the application is allowed to read the file; false otherwise.  
+	 * @throws IOException 
+	 * 
+	 */
+	@Override
+	public boolean canRead() throws IOException  {		
+		try {
 
+			FileSourceUser me = getFileSourceFactory().whoAmI();
+			attr = getAttr();
+			if( me.getId()==attr.getUId()) {
+				return canOwnerRead();
+			}
+			if( me.hasGroup(attr.getGId())) {
+				return canGroupRead();
+			}
+			return canOtherRead();
+		} catch (Exception e) {
+		}
+		return false;
+	}
+
+	/**
+	 * Tests whether the application can modify the file denoted by this abstract pathname. 
+	 * This is only here for comparability with java.io.File.  
+	 * 
+	 * @return
+	 * @throws IOException 
+	 * 
+	 */
+	@Override
+	public boolean canWrite() throws IOException {
+		try {
+
+			FileSourceUser me = getFileSourceFactory().whoAmI();
+			attr = getAttr();
+			if( attr.getUId()==me.getId()) {
+				return canOwnerWrite();
+			}
+			if( me.hasGroup(attr.getGId())) {
+				return canGroupWrite();
+			}
+			return canOtherWrite();
+			
+		} catch (Exception e) {
+		}
+		return false;
+	}
 
 	@Override
 	public int compareTo(Object o) {
