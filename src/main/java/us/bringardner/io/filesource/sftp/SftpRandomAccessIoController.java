@@ -24,35 +24,34 @@
  * ~version~
  */
 
+
 package us.bringardner.io.filesource.sftp;
 
 import java.io.IOException;
+import java.nio.file.AccessDeniedException;
+import java.nio.file.NoSuchFileException;
 import java.util.Arrays;
-
-import com.jcraft.jsch.ChannelSftp;
-import com.jcraft.jsch.JSchException;
-import com.jcraft.jsch.SftpException;
 
 import us.bringardner.io.filesource.AbstractRandomAccessIoController;
 import us.bringardner.io.filesource.FileSource;
+import us.bringardner.io.filesource.sftp.client.SftpChannel;
+import us.bringardner.io.filesource.sftp.client.SftpFile;
 
+/**
+ * Random access to an SFTP file in chunks of the factory's chunk size. Uses
+ * its own SFTP channel, so it doesn't compete with the factory's.
+ */
 public class SftpRandomAccessIoController extends AbstractRandomAccessIoController {
 
-	private SftpFileSourceFactory myFactory;
-	private ChannelSftp channel;
-	private byte[] _handle;
+	private final SftpFileSourceFactory myFactory;
+	private final SftpChannel channel;
+	private SftpFile handle;
 
 
 	public SftpRandomAccessIoController(FileSource file) throws IOException {
 		super(file);
-		myFactory = (SftpFileSourceFactory) file.getFileSourceFactory();		
-		try {
-			channel = (ChannelSftp) myFactory.getSession().openChannel("sftp");
-			channel.connect();
-		} catch (JSchException  e) {
-			throw new IOException(e);
-		}
-
+		myFactory = (SftpFileSourceFactory) file.getFileSourceFactory();
+		channel = myFactory.getConnection().openSftp();
 	}
 
 	@Override
@@ -82,12 +81,11 @@ public class SftpRandomAccessIoController extends AbstractRandomAccessIoControll
 		byte[] ret = new byte[want];
 		int got = 0;
 		while( got < want ) {
-			byte[] part = channel.readFileChunk(getHandle(), start+got, want-got);
-			if( part.length == 0 ) {
+			int n = getHandle().read(start+got, ret, got, want-got);
+			if( n <= 0 ) {
 				break; // EOF
 			}
-			System.arraycopy(part, 0, ret, got, part.length);
-			got += part.length;
+			got += n;
 		}
 		if( got == 0 ) {
 			throw new IOException("Unexpected end of file at "+start+" (length was "+length()
@@ -98,7 +96,7 @@ public class SftpRandomAccessIoController extends AbstractRandomAccessIoControll
 
 	@Override
 	protected void writeChunk(Chunk chunk) throws IOException {
-		channel.writeFileChunk(getHandle(), chunk.start, chunk.data);
+		getHandle().write(chunk.start, chunk.data, 0, chunk.data.length);
 		fileChanged();
 
 	}
@@ -108,27 +106,14 @@ public class SftpRandomAccessIoController extends AbstractRandomAccessIoControll
 		long len = length();
 		if( len != newLength) {
 			if( newLength< length()) {
-				shrinkTo(newLength);
+				// SFTP SETSTAT with only the size; no shell command
+				getHandle().truncate(newLength);
 			} else {
-				expandTo(newLength);
+				// write the last byte; the gap reads as zeros
+				getHandle().write(newLength-1, new byte[1], 0, 1);
 			}
 			fileChanged();
 		}
-	}
-
-	private void expandTo(long newLength) throws IOException {
-		byte [] data = new byte[1];
-		channel.writeFileChunk(getHandle(), newLength-1, data);
-	}
-
-
-	/**
-	 * Truncates with an SFTP SETSTAT carrying only the new size. This used to run
-	 * "truncate -s N path" in a shell: the path wasn't quoted, it needed shell
-	 * access, and it guessed the exit status after a fixed 100 ms sleep.
-	 */
-	private void shrinkTo(long newLength) throws IOException {
-		channel.setSize(file.getAbsolutePath(), newLength);
 	}
 
 	/** The file's size or times changed, so its cached attributes are stale. */
@@ -138,28 +123,27 @@ public class SftpRandomAccessIoController extends AbstractRandomAccessIoControll
 		}
 	}
 
-	private byte[] getHandle() throws IOException {
-		if( _handle == null ) {
+	private SftpFile getHandle() throws IOException {
+		if( handle == null ) {
 			try {
-				_handle = channel.openFile(file.getAbsolutePath());
-			} catch (IOException e) {
+				handle = channel.open(file.getAbsolutePath(), true);
+			} catch (NoSuchFileException e) {
+				// like RandomAccessFile in "rw" mode: create it
+				channel.write(file.getAbsolutePath(), false).close();
+				fileChanged();
+				handle = channel.open(file.getAbsolutePath(), true);
+			} catch (AccessDeniedException e) {
 				// No write permission: open it read-only, so it can still be read.
 				// Writes will then fail with the server's error.
-				if( e.getCause() instanceof SftpException 
-						&& ((SftpException) e.getCause()).id == ChannelSftp.SSH_FX_PERMISSION_DENIED) {
-					_handle = channel.openFileForRead(file.getAbsolutePath());
-				} else {
-					throw e;
-				}
+				handle = channel.open(file.getAbsolutePath(), false);
 			}
 		}
-		return _handle;
+		return handle;
 	}
 
 	/**
-	 * Saves pending changes, then closes the remote file handle and this
-	 * controller's SFTP channel. They used to stay open until the session
-	 * ended, and OpenSSH allows only 10 channels per connection by default.
+	 * Saves pending changes, then closes the remote file and this
+	 * controller's SFTP channel.
 	 */
 	@Override
 	public void close() throws Exception {
@@ -167,12 +151,12 @@ public class SftpRandomAccessIoController extends AbstractRandomAccessIoControll
 			super.close();
 		} finally {
 			try {
-				if( _handle != null ) {
-					channel.closeFile(_handle);
+				if( handle != null ) {
+					handle.close();
 				}
 			} finally {
-				_handle = null;
-				channel.disconnect();
+				handle = null;
+				channel.close();
 			}
 		}
 	}

@@ -31,20 +31,14 @@ import java.io.InputStream;
 import java.io.OutputStream;
 import java.net.MalformedURLException;
 import java.net.URL;
+import java.nio.file.AccessDeniedException;
+import java.nio.file.NoSuchFileException;
 import java.nio.file.attribute.GroupPrincipal;
 import java.nio.file.attribute.UserPrincipal;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Vector;
 
 import javax.swing.ProgressMonitor;
-
-import com.jcraft.jsch.ChannelSftp;
-import com.jcraft.jsch.ChannelSftp.LsEntry;
-import com.jcraft.jsch.JSchException;
-import com.jcraft.jsch.Session;
-import com.jcraft.jsch.SftpATTRS;
-import com.jcraft.jsch.SftpException;
 
 import us.bringardner.core.BaseObject;
 import us.bringardner.io.filesource.FileSource;
@@ -54,6 +48,9 @@ import us.bringardner.io.filesource.FileSourceGroup;
 import us.bringardner.io.filesource.FileSourceUser;
 import us.bringardner.io.filesource.ISeekableInputStream;
 import us.bringardner.io.filesource.fileproxy.FileProxy;
+import us.bringardner.io.filesource.sftp.client.SftpAttributes;
+import us.bringardner.io.filesource.sftp.client.SftpChannel;
+import us.bringardner.io.filesource.sftp.client.SftpEntry;
 
 public class SftpFileSource extends BaseObject implements FileSource {
 
@@ -63,28 +60,21 @@ public class SftpFileSource extends BaseObject implements FileSource {
 
 	private class SftpOutputStream extends OutputStream {
 
-		private ChannelSftp mySftp;
-		private OutputStream out;
+		/** Each stream has its own SFTP channel, so streams can be used from any thread. */
+		private final SftpChannel mySftp;
+		private final OutputStream out;
 
 		SftpOutputStream (boolean append) throws IOException {
 			attr = null;
 			exists = null;
 
+			mySftp = factory.getConnection().openSftp();
 			try {
-				mySftp = (ChannelSftp) factory.getSession().openChannel("sftp");
-				mySftp.connect();
-				if( append ) {
-					this.out = mySftp.put(path, ChannelSftp.APPEND);
-				} else {
-					this.out = mySftp.put(path, ChannelSftp.OVERWRITE);
-				}
-
-			} catch (JSchException | SftpException e) {
+				this.out = mySftp.write(path, append);
+			} catch (IOException | RuntimeException e) {
 				// don't leak the channel when the open fails
-				if( mySftp != null ) {
-					mySftp.disconnect();
-				}
-				throw new IOException(e);
+				mySftp.close();
+				throw e;
 			}
 
 		}
@@ -109,7 +99,7 @@ public class SftpFileSource extends BaseObject implements FileSource {
 			try {
 				out.close();
 			} finally {
-				mySftp.disconnect();
+				mySftp.close();
 				clearAttr();
 				clearParentKids();
 			}
@@ -137,40 +127,25 @@ public class SftpFileSource extends BaseObject implements FileSource {
 
 	private class SftpInputStream extends InputStream {
 
-		private ChannelSftp mySftp;
-		private InputStream in;
+		/** Each stream has its own SFTP channel, so streams can be used from any thread. */
+		private final SftpChannel mySftp;
+		private final InputStream in;
 
 		SftpInputStream() throws IOException {
-			attr = null;
-			exists = null;
-
-			try {
-				mySftp = (ChannelSftp) factory.getSession().openChannel("sftp");
-				mySftp.connect();
-				in = mySftp.get(path);
-			} catch (JSchException | SftpException e) {
-				// don't leak the channel when the open fails
-				if( mySftp != null ) {
-					mySftp.disconnect();
-				}
-				throw new IOException(e);
-			}
+			this(0);
 		}
 
 		public SftpInputStream(long skipTo) throws IOException {
 			attr = null;
 			exists = null;
 
+			mySftp = factory.getConnection().openSftp();
 			try {
-				mySftp = (ChannelSftp) factory.getSession().openChannel("sftp");
-				mySftp.connect();
-				in = mySftp.get(path,null,skipTo);
-			} catch (JSchException | SftpException e) {
+				in = mySftp.read(path, skipTo);
+			} catch (IOException | RuntimeException e) {
 				// don't leak the channel when the open fails
-				if( mySftp != null ) {
-					mySftp.disconnect();
-				}
-				throw new IOException(e);
+				mySftp.close();
+				throw e;
 			}
 
 		}
@@ -190,7 +165,7 @@ public class SftpFileSource extends BaseObject implements FileSource {
 			try {
 				in.close();
 			} finally {
-				mySftp.disconnect();
+				mySftp.close();
 			}
 		}
 
@@ -233,7 +208,7 @@ public class SftpFileSource extends BaseObject implements FileSource {
 	}
 
 	private String name;
-	private SftpATTRS attr;
+	private SftpAttributes attr;
 	private Boolean exists;
 	private SftpFileSource[] kids;
 	private String path;
@@ -286,7 +261,7 @@ public class SftpFileSource extends BaseObject implements FileSource {
 	 * @param parent
 	 * @param entry : The list entry for this file.
 	 */
-	private SftpFileSource(SftpFileSourceFactory factory, SftpFileSource parent, LsEntry entry) {
+	private SftpFileSource(SftpFileSourceFactory factory, SftpFileSource parent, SftpEntry entry) {
 		this.factory = factory;
 
 		this.parent = parent;
@@ -298,7 +273,7 @@ public class SftpFileSource extends BaseObject implements FileSource {
 		}
 		factory.rememberNames(entry);
 
-		SftpATTRS a = entry.getAttrs();
+		SftpAttributes a = entry.getAttrs();
 		if( a.isLink()) {
 			// A listing describes the link itself. Leave the attributes to be
 			// read with stat(), which follows the link like java.io.File does.
@@ -318,9 +293,9 @@ public class SftpFileSource extends BaseObject implements FileSource {
 			if( !isFile() ) {
 				// if it's not a file it may be a directory or a new / non existing entry
 				try {
-					Vector<LsEntry> ls = factory.ls(path);
+					List<SftpEntry> ls = factory.ls(path);
 					int cnt = 0;
-					for (LsEntry e : ls) {
+					for (SftpEntry e : ls) {
 						cnt++;
 						
 						//System.out.println("name ="+e.getFilename());
@@ -329,11 +304,11 @@ public class SftpFileSource extends BaseObject implements FileSource {
 						}
 						if( monitor != null) monitor.setProgress((int)((long)cnt*monitor.getMaximum()/ls.size()));
 					}
-				} catch (SftpException e) {
+				} catch (IOException e) {
 					if( isNoSuchFile(e)) {
 						exists = (false);
 					} else {
-						throw new IOException(e);
+						throw e;
 					}
 				}
 				kids = list.toArray(new SftpFileSource[list.size()]);
@@ -368,8 +343,8 @@ public class SftpFileSource extends BaseObject implements FileSource {
 	 * code, not the message text, which differs between servers
 	 * ("No such file", "No such file or directory", "File not found", ...).
 	 */
-	static boolean isNoSuchFile(SftpException e) {
-		return e.id == ChannelSftp.SSH_FX_NO_SUCH_FILE
+	static boolean isNoSuchFile(IOException e) {
+		return e instanceof NoSuchFileException
 				|| (e.getMessage() != null && e.getMessage().endsWith("not a valid file path"));
 	}
 
@@ -378,16 +353,16 @@ public class SftpFileSource extends BaseObject implements FileSource {
 	 * a link to a directory is a directory, and a link whose target is missing
 	 * doesn't exist. Returns null if the file doesn't exist.
 	 */
-	private synchronized SftpATTRS getAttr() throws IOException {
+	private synchronized SftpAttributes getAttr() throws IOException {
 		if( attr == null ) {
 			try {
 				attr = factory.stat(path);
 				exists = (true);
-			} catch (SftpException e) {
+			} catch (IOException e) {
 				if( isNoSuchFile(e)) {
 					exists = (false);
 				} else {
-					throw new IOException(e);
+					throw e;
 				}
 			}
 		}
@@ -395,14 +370,14 @@ public class SftpFileSource extends BaseObject implements FileSource {
 	}
 
 	/** Attributes of the path itself, without following a link; null if there's nothing there. */
-	private SftpATTRS getLinkAttr() throws IOException {
+	private SftpAttributes getLinkAttr() throws IOException {
 		try {
 			return factory.lstat(path);
-		} catch (SftpException e) {
+		} catch (IOException e) {
 			if( isNoSuchFile(e)) {
 				return null;
 			}
-			throw new IOException(e);
+			throw e;
 		}
 	}
 
@@ -411,7 +386,7 @@ public class SftpFileSource extends BaseObject implements FileSource {
 	 * and write anything, and execute anything with an execute bit set.
 	 */
 	private boolean hasPermission(int ownerBit) throws IOException {
-		SftpATTRS a = getAttr();
+		SftpAttributes a = getAttr();
 		if( a == null ) {
 			return false;
 		}
@@ -584,29 +559,25 @@ public class SftpFileSource extends BaseObject implements FileSource {
 	@Override
 	public synchronized boolean delete() throws IOException {
 		boolean ret = false;
-		try {
-			SftpATTRS self = getLinkAttr();   // the path itself, so a link is removed, not its target
-			if( self == null ) {
-				return false;   // like java.io.File: nothing to delete
-			}
-			if( self.isDir() ) {
-				factory.sftp(c -> { c.rmdir(path); return null; });
-			} else {
-				factory.sftp(c -> { c.rm(path); return null; });
-			}
-			attr = null;
-			exists = null;
-			FileSource p = getParentFile();
-			if( p != null ) {
-
-				if (p instanceof SftpFileSource) {
-					((SftpFileSource) p).kids = null;					
-				}
-			}
-			ret = true;
-		} catch (SftpException e) {
-			throw new IOException(e);
+		SftpAttributes self = getLinkAttr();   // the path itself, so a link is removed, not its target
+		if( self == null ) {
+			return false;   // like java.io.File: nothing to delete
 		}
+		if( self.isDir() ) {
+			factory.sftp(c -> { c.rmdir(path); return null; });
+		} else {
+			factory.sftp(c -> { c.remove(path); return null; });
+		}
+		attr = null;
+		exists = null;
+		FileSource p = getParentFile();
+		if( p != null ) {
+
+			if (p instanceof SftpFileSource) {
+				((SftpFileSource) p).kids = null;					
+			}
+		}
+		ret = true;
 		return ret;
 	}
 
@@ -669,14 +640,14 @@ public class SftpFileSource extends BaseObject implements FileSource {
 
 	@Override
 	public synchronized  boolean isDirectory() throws IOException {
-		SftpATTRS a = getAttr();
+		SftpAttributes a = getAttr();
 
 		return a == null ? false :  a.isDir();
 	}
 
 	@Override
 	public synchronized  boolean isFile() throws IOException {
-		SftpATTRS a = getAttr();
+		SftpAttributes a = getAttr();
 
 		return a == null ? false :  !a.isDir();
 	}
@@ -741,14 +712,10 @@ public class SftpFileSource extends BaseObject implements FileSource {
 	@Override
 	public synchronized  boolean mkdir() throws IOException {
 		boolean ret = false;
-		try {
-			factory.sftp(c -> { c.mkdir(path); return null; });
-			attr =  null;
-			exists = null;
-			ret = exists();
-		} catch (SftpException e) {
-			throw new IOException(e);
-		}
+		factory.sftp(c -> { c.mkdir(path); return null; });
+		attr =  null;
+		exists = null;
+		ret = exists();
 
 		return ret;
 	}
@@ -780,22 +747,18 @@ public class SftpFileSource extends BaseObject implements FileSource {
 				!dest.exists()				
 				) {
 
-			try {
-				if (dest instanceof SftpFileSource) {
-					SftpFileSource fs = (SftpFileSource) dest;
+			if (dest instanceof SftpFileSource) {
+				SftpFileSource fs = (SftpFileSource) dest;
 
 
-					if( !(myName.equals("/") || yourName.equals("/") || myName.equals(yourName))) {
-						factory.sftp(c -> { c.rename(myName, yourName); return null; });
-						ret = true;
-						fs.attr =attr = null;
-						fs.exists = exists = null;
-						fs.kids = kids = null;
-						((SftpFileSource)getParentFile()).kids = null;
-					}	
-				}
-			} catch (SftpException e) {
-				throw new IOException(e);
+				if( !(myName.equals("/") || yourName.equals("/") || myName.equals(yourName))) {
+					factory.sftp(c -> { c.rename(myName, yourName); return null; });
+					ret = true;
+					fs.attr =attr = null;
+					fs.exists = exists = null;
+					fs.kids = kids = null;
+					((SftpFileSource)getParentFile()).kids = null;
+				}	
 			}
 		}
 		return ret;
@@ -804,15 +767,11 @@ public class SftpFileSource extends BaseObject implements FileSource {
 	@Override
 	public synchronized  boolean setLastModifiedTime(long time) throws IOException {
 		boolean ret = false;
-		try {
-			int time2 = (int)(time/1000);
-			factory.sftp(c -> { c.setMtime(path, time2); return null; });
-			attr = null;
-			ret = getAttr().getMTime()==time2;
-			
-		} catch (SftpException e) {
-			throw new IOException(e);
-		}
+		int time2 = (int)(time/1000);
+		factory.sftp(c -> { c.setModifiedTime(path, time2); return null; });
+		attr = null;
+		ret = getAttr().getMTime()==time2;
+		
 		return ret;
 	}
 
@@ -964,8 +923,7 @@ public class SftpFileSource extends BaseObject implements FileSource {
 
 	@Override
 	public String getTitle() throws IOException {
-		Session session = factory.getSession();
-		return session.getUserName()+"@"+session.getHost()+":"+path;
+		return factory.getUser()+"@"+factory.getHost()+":"+path;
 	}
 
 	@Override
@@ -976,20 +934,16 @@ public class SftpFileSource extends BaseObject implements FileSource {
 	@Override
 	public synchronized FileSource getLinkedTo() throws IOException {
 		if( isLink == null || (isLink && linkedTo == null)) {
-			SftpATTRS self = getLinkAttr();
+			SftpAttributes self = getLinkAttr();
 			isLink = self != null && self.isLink();
 			if( isLink ) {
-				try {
-					String target = factory.readlink(path);
-					if( !target.startsWith("/")) {
-						// a relative target is relative to the link's own directory
-						String dir = getParent();
-						target = (dir == null ? "" : dir) + "/" + target;
-					}
-					linkedTo = factory.createFileSource(target);
-				} catch (SftpException e) {
-					throw new IOException(e);
+				String target = factory.readlink(path);
+				if( !target.startsWith("/")) {
+					// a relative target is relative to the link's own directory
+					String dir = getParent();
+					target = (dir == null ? "" : dir) + "/" + target;
 				}
+				linkedTo = factory.createFileSource(target);
 			}
 		}
 		return isLink ? linkedTo : null;
@@ -1015,7 +969,7 @@ public class SftpFileSource extends BaseObject implements FileSource {
 	@Override
 	public synchronized FileSourceUser getOwner() throws IOException {
 		if( owner == null ) {
-			SftpATTRS a = getAttr();
+			SftpAttributes a = getAttr();
 			if( a == null ) {
 				return new FileSourceUser();
 			}
@@ -1026,9 +980,9 @@ public class SftpFileSource extends BaseObject implements FileSource {
 				String dir = getParent();
 				try {
 					factory.ls(dir == null ? path : dir);   // remembers every entry's names
-				} catch (SftpException e) {
-					if( !isNoSuchFile(e) && e.id != ChannelSftp.SSH_FX_PERMISSION_DENIED) {
-						throw new IOException(e);
+				} catch (IOException e) {
+					if( !isNoSuchFile(e) && !(e instanceof AccessDeniedException)) {
+						throw e;
 					}
 				}
 				userName = factory.userName(a.getUId());
@@ -1054,7 +1008,7 @@ public class SftpFileSource extends BaseObject implements FileSource {
 	 * if the file doesn't exist or the server refuses.
 	 */
 	private boolean changeMode(int set, int clear) throws IOException {
-		SftpATTRS a = getAttr();
+		SftpAttributes a = getAttr();
 		if( a == null ) {
 			return false;
 		}
@@ -1062,8 +1016,8 @@ public class SftpFileSource extends BaseObject implements FileSource {
 		int mode = (perm | set) & ~clear;
 		if( mode != perm ) {
 			try {
-				factory.sftp(c -> { c.chmod(mode, path); return null; });
-			} catch (SftpException e) {
+				factory.sftp(c -> { c.chmod(path, mode); return null; });
+			} catch (AccessDeniedException | NoSuchFileException e) {
 				return false;
 			} finally {
 				clearAttr();
@@ -1164,17 +1118,10 @@ public class SftpFileSource extends BaseObject implements FileSource {
 
 	@Override
 	public boolean setLastAccessTime(long time) throws IOException {
-		boolean ret = false;
-		try {
-			int time2 = (int)(time/1000);
-			factory.sftp(c -> { c.setAtime(path, time2); return null; });			
-			attr = null;
-			ret = getAttr().getATime() == time2;;
-		} catch (SftpException  e) {
-			throw new IOException(e);
-		}
-		
-		return ret;
+		int time2 = (int)(time/1000);
+		factory.sftp(c -> { c.setAccessTime(path, time2); return null; });
+		attr = null;
+		return getAttr().getATime() == time2;
 	}
 
 	@Override
@@ -1187,13 +1134,9 @@ public class SftpFileSource extends BaseObject implements FileSource {
 	public boolean setGroup(GroupPrincipal group) throws IOException {
 		if (group instanceof FileSourceGroup) {
 			int gid =  ((FileSourceGroup) group).getId();
-			try {
-				factory.sftp(c -> { c.chgrp(gid, path); return null; });
-				clearOwner();
-				return true;
-			} catch (SftpException e) {
-				throw new IOException(e);
-			} 
+			factory.sftp(c -> { c.chgrp(path, gid); return null; });
+			clearOwner();
+			return true;
 		}
 		return false;
 	}
@@ -1202,13 +1145,9 @@ public class SftpFileSource extends BaseObject implements FileSource {
 	public boolean setOwner(UserPrincipal owner) throws IOException {
 		if (owner instanceof FileSourceUser) {
 			int uid = ((FileSourceUser) owner).getId();
-			try {
-				factory.sftp(c -> { c.chown(uid, path); return null; });
-				clearOwner();
-				return true;
-			} catch (SftpException e) {
-				throw new IOException(e);
-			}
+			factory.sftp(c -> { c.chown(path, uid); return null; });
+			clearOwner();
+			return true;
 		}
 		return false;
 	}
