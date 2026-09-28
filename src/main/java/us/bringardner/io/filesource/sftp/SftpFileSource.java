@@ -558,11 +558,10 @@ public class SftpFileSource extends BaseObject implements FileSource {
 	public synchronized boolean delete() throws IOException {
 		boolean ret = false;
 		try {
-			ChannelSftp sftp = factory.getSftp_();
 			if( isDirectory() ) {
-				sftp.rmdir(path);
+				factory.sftp(c -> { c.rmdir(path); return null; });
 			} else {
-				sftp.rm(path);
+				factory.sftp(c -> { c.rm(path); return null; });
 			}
 			attr = null;
 			exists = null;
@@ -712,7 +711,7 @@ public class SftpFileSource extends BaseObject implements FileSource {
 	public synchronized  boolean mkdir() throws IOException {
 		boolean ret = false;
 		try {
-			factory.getSftp_().mkdir(path);
+			factory.sftp(c -> { c.mkdir(path); return null; });
 			attr =  null;
 			exists = null;
 			ret = exists();
@@ -756,7 +755,7 @@ public class SftpFileSource extends BaseObject implements FileSource {
 
 
 					if( !(myName.equals("/") || yourName.equals("/") || myName.equals(yourName))) {
-						factory.getSftp_().rename(myName, yourName);
+						factory.sftp(c -> { c.rename(myName, yourName); return null; });
 						ret = true;
 						fs.attr =attr = null;
 						fs.exists = exists = null;
@@ -776,7 +775,7 @@ public class SftpFileSource extends BaseObject implements FileSource {
 		boolean ret = false;
 		try {
 			int time2 = (int)(time/1000);
-			factory.getSftp_().setMtime(path, time2);
+			factory.sftp(c -> { c.setMtime(path, time2); return null; });
 			attr = null;
 			ret = getAttr().getMTime()==time2;
 			
@@ -1038,7 +1037,8 @@ public class SftpFileSource extends BaseObject implements FileSource {
 			}
 
 			if( p2 != perm) {								
-				factory.getSftp_().chmod(p2, path);
+				final int mode = p2;
+				factory.sftp(c -> { c.chmod(mode, path); return null; });
 				attr = null;
 			}			
 			return true;
@@ -1059,7 +1059,8 @@ public class SftpFileSource extends BaseObject implements FileSource {
 			}			
 
 			if( r2 != perm) {								
-				factory.getSftp_().chmod(r2, path);
+				final int mode = r2;
+				factory.sftp(c -> { c.chmod(mode, path); return null; });
 				attr = null;
 			}		
 			return true;
@@ -1081,7 +1082,8 @@ public class SftpFileSource extends BaseObject implements FileSource {
 			}
 
 			if( r2 != perm) {								
-				factory.getSftp_().chmod(r2, path);
+				final int mode = r2;
+				factory.sftp(c -> { c.chmod(mode, path); return null; });
 				attr = null;
 			}			
 			return true;
@@ -1149,7 +1151,8 @@ public class SftpFileSource extends BaseObject implements FileSource {
 			}
 
 			if( r2 != perm) {								
-				factory.getSftp_().chmod(r2, path);
+				final int mode = r2;
+				factory.sftp(c -> { c.chmod(mode, path); return null; });
 				attr = null;
 			}						
 			return true;
@@ -1172,7 +1175,8 @@ public class SftpFileSource extends BaseObject implements FileSource {
 			}
 
 			if( r2 != perm) {								
-				factory.getSftp_().chmod(r2, path);
+				final int mode = r2;
+				factory.sftp(c -> { c.chmod(mode, path); return null; });
 				attr = null;
 			}				
 			return true;
@@ -1194,7 +1198,8 @@ public class SftpFileSource extends BaseObject implements FileSource {
 			}
 
 			if( r2 != perm) {								
-				factory.getSftp_().chmod(r2, path);
+				final int mode = r2;
+				factory.sftp(c -> { c.chmod(mode, path); return null; });
 				attr = null;
 			}			
 			return true;
@@ -1216,7 +1221,8 @@ public class SftpFileSource extends BaseObject implements FileSource {
 			}
 
 			if( r2 != perm) {								
-				factory.getSftp_().chmod(r2, path);
+				final int mode = r2;
+				factory.sftp(c -> { c.chmod(mode, path); return null; });
 				attr = null;
 			}			
 			return true;
@@ -1239,7 +1245,8 @@ public class SftpFileSource extends BaseObject implements FileSource {
 			}
 
 			if( r2 != perm) {								
-				factory.getSftp_().chmod(r2, path);
+				final int mode = r2;
+				factory.sftp(c -> { c.chmod(mode, path); return null; });
 				attr = null;
 			}			
 			return true;
@@ -1262,7 +1269,8 @@ public class SftpFileSource extends BaseObject implements FileSource {
 			}
 
 			if( r2 != perm) {								
-				factory.getSftp_().chmod(r2, path);
+				final int mode = r2;
+				factory.sftp(c -> { c.chmod(mode, path); return null; });
 				attr = null;
 			}			
 			return true;
@@ -1302,7 +1310,7 @@ public class SftpFileSource extends BaseObject implements FileSource {
 		boolean ret = false;
 		try {
 			int time2 = (int)(time/1000);
-			factory.getSftp_().setAtime(getAbsolutePath(), time2);			
+			factory.sftp(c -> { c.setAtime(path, time2); return null; });			
 			attr = null;
 			ret = getAttr().getATime() == time2;;
 		} catch (SftpException  e) {
@@ -1323,10 +1331,7 @@ public class SftpFileSource extends BaseObject implements FileSource {
 		if (group instanceof FileSourceGroup) {
 			int gid =  ((FileSourceGroup) group).getId();
 			try {
-				factory.getSftp_().
-				chgrp(gid, 
-						getAbsolutePath()
-						);
+				factory.sftp(c -> { c.chgrp(gid, path); return null; });
 				return true;
 			} catch (SftpException e) {
 				throw new IOException(e);
@@ -1340,7 +1345,7 @@ public class SftpFileSource extends BaseObject implements FileSource {
 		if (owner instanceof FileSourceUser) {
 			int uid = ((FileSourceUser) owner).getId();
 			try {
-				factory.getSftp_().chown(uid, getAbsolutePath());
+				factory.sftp(c -> { c.chown(uid, path); return null; });
 				return true;
 			} catch (SftpException e) {
 				throw new IOException(e);

@@ -26,9 +26,13 @@
 package us.bringardner.io.filesource.sftp;
 
 import java.awt.Component;
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.net.URL;
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.nio.file.attribute.PosixFilePermission;
 import java.util.HashMap;
 import java.util.Map;
@@ -64,7 +68,15 @@ public class SftpFileSourceFactory extends FileSourceFactory {
 	public static final String PROP_PRIVATE_KEY_FILE_NAME = "identityFile";
 	public static final String PROP_PRIVATE_KEY = "privateKey";
 	public static final String PROP_PASSWORD = "password";
+	/** Path of a known_hosts file used to check the server's host key. */
+	public static final String PROP_KNOWN_HOSTS = "knownHosts";
+	/** "no" (default) accepts any host key; "yes" requires it to be in the known_hosts file. */
+	public static final String PROP_STRICT_HOST_KEY_CHECKING = "strictHostKeyChecking";
+	public static final String PROP_CONNECT_TIMEOUT = "connectTimeout";
+	public static final String PROP_SERVER_ALIVE_INTERVAL = "serverAliveInterval";
 	public static final int DEFAULT_PORT = 22;
+	public static final int DEFAULT_CONNECT_TIMEOUT = 30_000;
+	public static final int DEFAULT_SERVER_ALIVE_INTERVAL = 30_000;
 
 	/**
 	 * This code was taken from sun.nio.fs.UnixFileModeAttribute
@@ -96,26 +108,33 @@ public class SftpFileSourceFactory extends FileSourceFactory {
 		return mode;
 	}
 
-	private static class SftpSession {
-		@SuppressWarnings("unused")
-		String key;
-		Session session;
-		ChannelSftp sftp;
-		int isSession = 0;
+	/**
+	 * An SSH session shared by every factory that connects with the same
+	 * connection details and credentials (see getSessionKey()). Each factory
+	 * opens its own SFTP channel over it: a JSch Session can carry several
+	 * channels from different threads, but one ChannelSftp must not be used by
+	 * two threads at once.
+	 */
+	private static class SharedSession {
+		final String key;
+		final Session session;
+		/** Number of factories holding this session; guarded by 'sessions'. */
+		int refs = 1;
 
-		public SftpSession(String key,Session session, ChannelSftp sftp) {
+		SharedSession(String key, Session session) {
 			this.key = key;
 			this.session = session;
-			this.sftp = sftp;
 		}
-
-
 	}
 
-	private static final Map<String,SftpSession> sessions = new HashMap<>();
+	/** Open shared sessions by key; all access is synchronized on the map. */
+	private static final Map<String,SharedSession> sessions = new HashMap<>();
 
+	/** An SFTP call made on this factory's channel; see sftp(). */
+	public interface SftpOperation<T> {
+		T run(ChannelSftp sftp) throws SftpException;
+	}
 
-	private JSch jsch = new JSch() ;
 	private String host;
 	private String user;
 	private String password;
@@ -123,7 +142,15 @@ public class SftpFileSourceFactory extends FileSourceFactory {
 	private String sessionKey;
 	private byte [] privateKey;
 	private int port = DEFAULT_PORT;
+	private String knownHosts;
+	private String strictHostKeyChecking = "no";
+	private int connectTimeout = DEFAULT_CONNECT_TIMEOUT;
+	private int serverAliveInterval = DEFAULT_SERVER_ALIVE_INTERVAL;
+
+	/** The shared session this factory holds a reference to, or null. */
+	private SharedSession shared;
 	private Session session;
+	/** This factory's own SFTP channel; only used inside sftp(), which locks the factory. */
 	private ChannelSftp sftp;
 
 	private FileSource[] roots;
@@ -195,6 +222,52 @@ public class SftpFileSourceFactory extends FileSourceFactory {
 		this.port = port;
 	}
 
+	public String getKnownHosts() {
+		return knownHosts;
+	}
+
+	/** Path of a known_hosts file; used when strict host key checking is "yes". */
+	public void setKnownHosts(String knownHosts) {
+		this.knownHosts = knownHosts;
+	}
+
+	public String getStrictHostKeyChecking() {
+		return strictHostKeyChecking;
+	}
+
+	/**
+	 * "no" (the default) accepts any host key, which lets a server be
+	 * impersonated. "yes" rejects keys that aren't in the known_hosts file.
+	 */
+	public void setStrictHostKeyChecking(String value) {
+		if( value == null || value.trim().isEmpty()) {
+			value = "no";
+		}
+		value = value.trim().toLowerCase();
+		if( !value.equals("yes") && !value.equals("no")) {
+			throw new IllegalArgumentException("strictHostKeyChecking must be yes or no, not "+value);
+		}
+		this.strictHostKeyChecking = value;
+	}
+
+	public int getConnectTimeout() {
+		return connectTimeout;
+	}
+
+	/** Milliseconds to wait for the connection, handshake and channel opens (0 = forever). */
+	public void setConnectTimeout(int connectTimeout) {
+		this.connectTimeout = connectTimeout;
+	}
+
+	public int getServerAliveInterval() {
+		return serverAliveInterval;
+	}
+
+	/** Milliseconds between keepalive messages on an idle connection (0 = none). */
+	public void setServerAliveInterval(int serverAliveInterval) {
+		this.serverAliveInterval = serverAliveInterval;
+	}
+
 	public Session getSession() throws IOException {
 		if( !isConnected()) {
 			connect();
@@ -203,11 +276,27 @@ public class SftpFileSourceFactory extends FileSourceFactory {
 		return session;
 	}
 
+	/**
+	 * This factory's SFTP channel. Callers must not use it from more than one
+	 * thread at a time; prefer sftp(), which does the locking.
+	 */
 	public ChannelSftp getSftp_() throws IOException {
 		if (!isConnected()) {
 			connect();
 		}
 		return sftp;
+	}
+
+	/**
+	 * Runs one SFTP call on this factory's channel, holding the factory's lock
+	 * so calls from different threads can't interleave on the channel.
+	 * Reconnects first if the channel or session has closed.
+	 */
+	public synchronized <T> T sftp(SftpOperation<T> op) throws IOException, SftpException {
+		if( !isConnected()) {
+			connect();
+		}
+		return op.run(sftp);
 	}
 
 	public void setSession(Session session) {
@@ -254,65 +343,128 @@ public class SftpFileSourceFactory extends FileSourceFactory {
 	}
 
 	@Override
-	public boolean isConnected() {
-		return session != null && session.isConnected();
+	public synchronized boolean isConnected() {
+		return session != null && session.isConnected() && sftp != null && sftp.isConnected();
 	}
 
+	/**
+	 * Factories with the same key share one SSH session. Unless a key was set
+	 * explicitly, it covers the connection details and a hash of the
+	 * credentials, so a factory with different (or wrong) credentials never
+	 * reuses another factory's logged-in session.
+	 */
 	public String getSessionKey() {
 		String ret = sessionKey;
-		if( ret == null ) {
-			ret = getUser()+"@"+getHost()+":"+getPort();
+		if( ret == null || ret.isEmpty()) {
+			ret = getUser()+"@"+getHost()+":"+getPort()+"#"+credentialHash();
 		}
 
 		return ret;
+	}
+
+	private String credentialHash() {
+		try {
+			MessageDigest md = MessageDigest.getInstance("SHA-256");
+			for(String part : new String[] {password, privateKeyFileName, knownHosts, strictHostKeyChecking}) {
+				md.update((part == null ? "\0" : part).getBytes(StandardCharsets.UTF_8));
+				md.update((byte)0);
+			}
+			if( privateKey != null ) {
+				md.update(privateKey);
+			}
+			StringBuilder hex = new StringBuilder();
+			byte[] d = md.digest();
+			for (int i = 0; i < 8; i++) {
+				hex.append(String.format("%02x", d[i]));
+			}
+			return hex.toString();
+		} catch (NoSuchAlgorithmException e) {
+			throw new IllegalStateException(e);   // SHA-256 is always available
+		}
 	}
 
 	@Override
-	protected boolean connectImpl() throws IOException {
-		boolean ret = isConnected();
+	protected synchronized boolean connectImpl() throws IOException {
+		if( isConnected()) {
+			return true;
+		}
+		try {
+			if( shared == null || !shared.session.isConnected()) {
+				// no session yet, or ours has died: drop it and get a live one
+				releaseSession();
+				shared = acquireSession();
+			}
+			session = shared.session;
+			if( sftp != null ) {
+				// a JSch channel can't be reopened once closed
+				sftp.disconnect();
+			}
+			sftp = (ChannelSftp) session.openChannel("sftp");
+			sftp.connect(connectTimeout);
+			return true;
+		} catch (JSchException e) {
+			throw new IOException(e);
+		}
+	}
 
-		if( !ret ) {
-			try {
-				String key = getSessionKey();
-				SftpSession current = sessions.get(key);
-				if( current != null && current.session.isConnected()) {
-					if( !current.sftp.isConnected()) {
-						current.sftp.connect();
-					}
-					session = current.session;
-					sftp = current.sftp;
-					current.isSession++;
-					ret = true;
-				} else {
-					String pw = getPassword();
+	/** Reuses a live session with the same key, or connects a new one. */
+	private SharedSession acquireSession() throws JSchException {
+		String key = getSessionKey();
+		synchronized (sessions) {
+			SharedSession s = sessions.get(key);
+			if( s != null && s.session.isConnected()) {
+				s.refs++;
+				return s;
+			}
+			logDebug("Connecting to "+getUser()+"@"+getHost()+":"+getPort());
+			s = new SharedSession(key, openSession());
+			sessions.put(key, s);
+			return s;
+		}
+	}
 
-					logDebug("Connecting to "+key);
-					if( privateKey != null ) {
-						jsch.addIdentity(null, privateKey, null, null);
-					} else if( privateKeyFileName != null && !privateKeyFileName.isEmpty()) {
-						jsch.addIdentity(privateKeyFileName);
-					}
+	private Session openSession() throws JSchException {
+		// A new JSch per session, so identities don't pile up across connects
+		JSch jsch = new JSch();
+		if( knownHosts != null && !knownHosts.isEmpty()) {
+			jsch.setKnownHosts(knownHosts);
+		}
+		if( privateKey != null ) {
+			jsch.addIdentity(null, privateKey, null, null);
+		} else if( privateKeyFileName != null && !privateKeyFileName.isEmpty()) {
+			jsch.addIdentity(privateKeyFileName);
+		}
 
-					session = jsch.getSession(getUser(), getHost(), getPort());
+		Session s = jsch.getSession(getUser(), getHost(), getPort());
+		Properties prop = new Properties();
+		prop.put("StrictHostKeyChecking", strictHostKeyChecking);
+		s.setConfig(prop);
+		if( password != null ) {
+			s.setPassword(password);
+		}
+		if( serverAliveInterval > 0 ) {
+			s.setServerAliveInterval(serverAliveInterval);
+		}
+		s.connect(connectTimeout);
+		return s;
+	}
 
-					Properties prop = new Properties();
-					prop.put("StrictHostKeyChecking", "no");
-					if( pw != null ) {
-						session.setPassword(getPassword());
-					}
-					session.setConfig(prop);
-					session.connect();
-
-					sftp = (ChannelSftp) session.openChannel("sftp");
-					sftp.connect();
-					ret = true;
-					sessions.put(key, new SftpSession(key,session,sftp));
+	/** Drops this factory's reference; the last factory to let go closes the session. */
+	private void releaseSession() {
+		SharedSession s = shared;
+		shared = null;
+		session = null;
+		if( s == null ) {
+			return;
+		}
+		synchronized (sessions) {
+			if( --s.refs <= 0 ) {
+				if( sessions.get(s.key) == s ) {
+					sessions.remove(s.key);
 				}
-			} catch (JSchException e) {
-				throw new IOException(e);
+				s.session.disconnect();
 			}
 		}
-		return ret;
 	}
 
 	@Override
@@ -322,30 +474,32 @@ public class SftpFileSourceFactory extends FileSourceFactory {
 	}
 
 	@Override
-	protected void disConnectImpl() {
-		if( session != null ) {
-			try {
-				SftpSession current = sessions.get(getSessionKey());
-				if( current != null && --current.isSession <=0) {
-					session.disconnect();
-					sftp.disconnect();
-					sessions.remove(getSessionKey());
-				}
-			} catch (Exception e) {
-			}
-			session = null;
+	protected synchronized void disConnectImpl() {
+		if( sftp != null ) {
+			sftp.disconnect();
 			sftp = null;
 		}
-
+		// safe to call twice: the second call finds shared == null
+		releaseSession();
 	}
 
 	@Override
 	public FileSourceFactory createThreadSafeCopy() {
+		// The copy shares the SSH session (same key) but opens its own SFTP
+		// channel, so it can be used from another thread.
 		SftpFileSourceFactory ret = new SftpFileSourceFactory();
 		ret.host = host;
 		ret.user = user;
 		ret.password = password;
 		ret.port = port;
+		ret.privateKeyFileName = privateKeyFileName;
+		ret.privateKey = privateKey;
+		ret.sessionKey = sessionKey;
+		ret.knownHosts = knownHosts;
+		ret.strictHostKeyChecking = strictHostKeyChecking;
+		ret.connectTimeout = connectTimeout;
+		ret.serverAliveInterval = serverAliveInterval;
+		ret.chunkSize = chunkSize;
 
 		return ret;
 	}
@@ -360,6 +514,10 @@ public class SftpFileSourceFactory extends FileSourceFactory {
 		ret.setProperty(PROP_PRIVATE_KEY_FILE_NAME, privateKeyFileName == null ? "":privateKeyFileName);
 		ret.setProperty(PROP_PRIVATE_KEY, privateKey == null ? "":new String(privateKey));
 		ret.setProperty(PROP_SESSION_KEY, sessionKey == null ? "":sessionKey);
+		ret.setProperty(PROP_KNOWN_HOSTS, knownHosts == null ? "":knownHosts);
+		ret.setProperty(PROP_STRICT_HOST_KEY_CHECKING, strictHostKeyChecking);
+		ret.setProperty(PROP_CONNECT_TIMEOUT, ""+connectTimeout);
+		ret.setProperty(PROP_SERVER_ALIVE_INTERVAL, ""+serverAliveInterval);
 
 		return ret;
 	}
@@ -375,24 +533,13 @@ public class SftpFileSourceFactory extends FileSourceFactory {
 
 
 		if( auth == null ) {
-			if( sessions.size() > 0) {
-
-				String key = sessionKey;
-
-				// if we have a session key , connect will be ok.
-				if( key == null ) {
-					key = getConnectProperties().getProperty(PROP_SESSION_KEY);
-					if( key == null || key.isEmpty()) {
-						if( sessions.size() > 1) {
-							throw new RuntimeException("URL has no authority and there are tooo many open sessions to pick from");
-						}
-
-						for(String k : sessions.keySet()) {
-							sessionKey = k;
-							return;
-						}
+			synchronized (sessions) {
+				// if we have a session key, connect will be ok.
+				if( sessions.size() > 0 && (sessionKey == null || sessionKey.isEmpty())) {
+					if( sessions.size() > 1) {
+						throw new RuntimeException("URL has no authority and there are too many open sessions to pick from");
 					}
-
+					sessionKey = sessions.keySet().iterator().next();
 				}
 			}
 		} else {
@@ -416,7 +563,10 @@ public class SftpFileSourceFactory extends FileSourceFactory {
 
 	@Override
 	public void setConnectionProperties(Properties p) {
-		setHost(p.getProperty(PROP_HOST,getHost()));
+		String h = p.getProperty(PROP_HOST,getHost());
+		if( h != null ) {
+			setHost(h);
+		}
 		setPort(Integer.parseInt(p.getProperty(PROP_PORT,""+getPort())));
 		setUser(p.getProperty(PROP_USER,getUser()));
 		setPassword(p.getProperty(PROP_PASSWORD,getPassword()));
@@ -427,37 +577,42 @@ public class SftpFileSourceFactory extends FileSourceFactory {
 		} else {
 			privateKey = null;
 		}
-
+		String kh = p.getProperty(PROP_KNOWN_HOSTS, knownHosts);
+		knownHosts = kh == null || kh.isEmpty() ? null : kh;
+		setStrictHostKeyChecking(p.getProperty(PROP_STRICT_HOST_KEY_CHECKING, strictHostKeyChecking));
+		connectTimeout = Integer.parseInt(p.getProperty(PROP_CONNECT_TIMEOUT, ""+connectTimeout).trim());
+		serverAliveInterval = Integer.parseInt(p.getProperty(PROP_SERVER_ALIVE_INTERVAL, ""+serverAliveInterval).trim());
 	}
 
 	@Override
 	public String getTitle() {
-		return FACTORY_ID+"://"+session.getUserName()+"@"+getHost()+":"+getPort();
+		return FACTORY_ID+"://"+getUser()+"@"+getHost()+":"+getPort();
 	}
 
+	/** Works while disconnected, and no longer includes the password. */
 	@Override
 	public String getURL() {
-		return FACTORY_ID+"://"+session.getUserName()+":"+getPassword()+"@"+getHost()+":"+getPort();
+		return FACTORY_ID+"://"+getUser()+"@"+getHost()+":"+getPort();
 	}
 
 	
-	public synchronized Vector<ChannelSftp.LsEntry> ls(String path) throws IOException, SftpException {
-		return getSftp_().ls(path);
+	public Vector<ChannelSftp.LsEntry> ls(String path) throws IOException, SftpException {
+		return sftp(c -> c.ls(path));
 	}
 
-	public synchronized SftpATTRS lstat(String path) throws SftpException, IOException {
-		return getSftp_().lstat(path);
+	public SftpATTRS lstat(String path) throws SftpException, IOException {
+		return sftp(c -> c.lstat(path));
 	}
 
-	public synchronized String readlink(String path) throws SftpException, IOException {
-		return getSftp_().readlink(path);
+	public String readlink(String path) throws SftpException, IOException {
+		return sftp(c -> c.readlink(path));
 	}
 
 	@Override
 	public FileSource getCurrentDirectory() throws  IOException {		
 		if( currentDir == null ) {
 			try {
-				currentDir = new SftpFileSource(this, getSftp_().pwd());
+				currentDir = new SftpFileSource(this, sftp(c -> c.pwd()));
 			} catch (SftpException e) {
 				throw new IOException(e);
 			}
@@ -512,6 +667,14 @@ public class SftpFileSourceFactory extends FileSourceFactory {
 		return super.whoAmI();
 	}
 
+	/** How long runCommand waits for a command to finish. */
+	private static final long COMMAND_TIMEOUT_MS = 30_000;
+
+	/**
+	 * Runs a command over an SSH exec channel and returns its output
+	 * (stdout followed by stderr). Throws if it exits non-zero or doesn't
+	 * finish within 30 s. Needs shell access on the server.
+	 */
 	public String runCommand(String command) throws IOException {
 		String ret = null;
 		if( isConnected()) {
@@ -519,45 +682,43 @@ public class SftpFileSourceFactory extends FileSourceFactory {
 			try {
 				execChannel = (ChannelExec) getSession().openChannel("exec");
 				execChannel.setCommand(command);
+				// JSch writes stderr into this buffer itself, so a command that
+				// fills stderr can't block while stdout is being read.
+				ByteArrayOutputStream stdErr = new ByteArrayOutputStream();
+				execChannel.setErrStream(stdErr, true);
 				InputStream stdOut = execChannel.getInputStream() ;
-				InputStream stdErr = execChannel.getErrStream();
-				execChannel.connect();
-				StringBuilder output = new StringBuilder();
-				byte[] buffer = new byte[1024];
+				execChannel.connect(connectTimeout);
+				ByteArrayOutputStream out = new ByteArrayOutputStream();
+				byte[] buffer = new byte[4096];
 				int read;
 				while ( ( read = stdOut.read( buffer, 0, buffer.length ) ) >= 0 ) {
-					for (int idx = 0; idx < read; idx++) {
-						output.append((char)buffer[idx]);
-					}
+					out.write(buffer, 0, read);
 				}
-				stdOut.close();
-				while ( ( read = stdErr.read( buffer, 0, buffer.length ) ) >= 0 ) {
-					for (int idx = 0; idx < read; idx++) {
-						output.append((char)buffer[idx]);
-					}
-				}
-				stdErr.close();
 
-				long start = System.currentTimeMillis();
-				while(!execChannel.isClosed() && (System.currentTimeMillis()-start)< 2000) {
+				long end = System.currentTimeMillis() + COMMAND_TIMEOUT_MS;
+				while(!execChannel.isClosed()) {
+					if( System.currentTimeMillis() > end ) {
+						throw new IOException("Command did not finish within "+COMMAND_TIMEOUT_MS/1000+" s: "+command);
+					}
 					try {
 						Thread.sleep(10);
 					} catch (InterruptedException e) {
+						Thread.currentThread().interrupt();
+						throw new IOException("Interrupted while waiting for: "+command);
 					}
 				}
+				String output = out.toString(StandardCharsets.UTF_8.name())
+						+ stdErr.toString(StandardCharsets.UTF_8.name());
 				int status = execChannel.getExitStatus();
 				if( status != 0) {
 					throw new IOException("status="+status+" ("+output+")");
 				}
-				ret = output.toString();
+				ret = output;
 			} catch (JSchException  e) {
 				throw new IOException(e);
 			} finally {
 				if( execChannel !=null) {
-					try {
-						execChannel.disconnect();
-					} catch (Exception e2) {
-					}
+					execChannel.disconnect();
 				}
 			}
 		}
@@ -567,7 +728,7 @@ public class SftpFileSourceFactory extends FileSourceFactory {
 	@Override
 	public FileSource createSymbolicLink(FileSource newFileLink, FileSource existingFile) throws IOException {
 		try {
-			getSftp_().symlink(existingFile.getAbsolutePath(), newFileLink.getAbsolutePath());
+			sftp(c -> { c.symlink(existingFile.getAbsolutePath(), newFileLink.getAbsolutePath()); return null; });
 			existingFile.refresh();
 			newFileLink.refresh();
 		} catch (SftpException e) {
@@ -579,7 +740,7 @@ public class SftpFileSourceFactory extends FileSourceFactory {
 	@Override
 	public FileSource createLink(FileSource newFileLink, FileSource existingFile) throws IOException {
 		try {
-			getSftp_().hardlink(existingFile.getAbsolutePath(), newFileLink.getAbsolutePath());
+			sftp(c -> { c.hardlink(existingFile.getAbsolutePath(), newFileLink.getAbsolutePath()); return null; });
 			existingFile.refresh();
 			newFileLink.refresh();
 		} catch (SftpException e) {
