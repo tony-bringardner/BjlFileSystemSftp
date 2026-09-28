@@ -165,7 +165,7 @@ public class SftpFileSourceFactory extends FileSourceFactory {
 			if( i > 0 ) {
 				setPort(i);
 			}
-			host = host.substring(0, idx-1);
+			host = host.substring(0, idx);
 		}
 
 		this.host = host;

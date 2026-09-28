@@ -54,8 +54,6 @@ public class SftpRandomAccessIoController extends AbstractRandomAccessIoControll
 
 	}
 
-	String dataString="";
-
 	@Override
 	protected Chunk readChunkForPos(long pos) throws IOException {
 		Chunk ret = new Chunk();
@@ -72,15 +70,13 @@ public class SftpRandomAccessIoController extends AbstractRandomAccessIoControll
 			ret.data = channel.readFileChunk(getHandle(), ret.start, chunkSize);
 			ret.size = ret.data.length;			
 		}
-		dataString = new String(ret.data);
-
-
 		return ret;
 	}
 
 	@Override
 	protected void writeChunk(Chunk chunk) throws IOException {
 		channel.writeFileChunk(getHandle(), chunk.start, chunk.data);
+		fileChanged();
 
 	}
 
@@ -93,17 +89,12 @@ public class SftpRandomAccessIoController extends AbstractRandomAccessIoControll
 			} else {
 				expandTo(newLength);
 			}
+			fileChanged();
 		}
 	}
 
 	private void expandTo(long newLength) throws IOException {
-
-		long len = length();
-
-		long delta = newLength-len;
-		byte [] data = new byte[(int)delta];
-		data = new byte[1];
-		len = newLength;
+		byte [] data = new byte[1];
 		channel.writeFileChunk(getHandle(), newLength-1, data);
 	}
 
@@ -140,6 +131,13 @@ public class SftpRandomAccessIoController extends AbstractRandomAccessIoControll
 	}
 
 
+
+	/** The file's size or times changed, so its cached attributes are stale. */
+	private void fileChanged() {
+		if (file instanceof SftpFileSource) {
+			((SftpFileSource) file).clearAttr();
+		}
+	}
 
 	private byte[] getHandle() throws IOException {
 		if( _handle == null ) {

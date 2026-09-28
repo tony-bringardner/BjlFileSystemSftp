@@ -241,12 +241,10 @@ public class SftpFileSource extends BaseObject implements FileSource {
 	SftpFileSource(SftpFileSourceFactory factory, String path) {
 		this.factory = factory;
 		this.path = path;
-		int idx = path.lastIndexOf('/');
-		if( idx == 0) {
-			// path is "/" 
+		if( path.equals("/")) {
 			name = "/";
 		} else {
-			name = path.substring(idx+1);
+			name = path.substring(path.lastIndexOf('/')+1);
 		}
 	}
 
@@ -262,7 +260,8 @@ public class SftpFileSource extends BaseObject implements FileSource {
 		this.parent = parent;
 		this.factory = factory;
 		this.name = name;
-		this.path = parent.getCanonicalPath()+"/"+name;
+		String parentPath = parent.getCanonicalPath();
+		this.path = parentPath.endsWith("/") ? parentPath+name : parentPath+"/"+name;
 		this.parent.addChild(this);
 	}
 
@@ -322,8 +321,10 @@ public class SftpFileSource extends BaseObject implements FileSource {
 		return kids;
 	}
 
-	private synchronized void clearAttr()  {
+	/** Forget cached attributes, so the next call re-reads them from the server. */
+	synchronized void clearAttr()  {
 		attr = null;
+		exists = null;
 	}
 
 	private synchronized SftpATTRS getAttr() throws IOException {
@@ -510,10 +511,7 @@ public class SftpFileSource extends BaseObject implements FileSource {
 			path = path.substring(0, path.length()-1);
 		}
 		String parts [] = path.split("[/]");
-		SftpFileSource ret = findChild(parts[0]);
-		// does it exist?
-
-		ret = new SftpFileSource(factory,this,parts[0]);
+		SftpFileSource ret = new SftpFileSource(factory,this,parts[0]);
 		for(int idx=1; idx < parts.length; idx++ ) {
 			ret = new SftpFileSource(factory,ret,parts[idx]);
 		}
@@ -533,18 +531,6 @@ public class SftpFileSource extends BaseObject implements FileSource {
 		tmp[kids.length] = child;
 		kids = tmp;
 		 */
-	}
-
-	private SftpFileSource findChild(String name) throws IOException {
-		SftpFileSource ret = null;
-		for (SftpFileSource f : getKids(null)) {
-			if( f.getName().equals(name) ) {
-				ret = f;
-				break;
-			}
-		}
-
-		return ret;
 	}
 
 	@Override
@@ -647,7 +633,6 @@ public class SftpFileSource extends BaseObject implements FileSource {
 	@Override
 	public synchronized  long length() throws IOException {
 		if( exists()) {
-			attr=null;
 			return getAttr().getSize();
 		} else {
 			return 0;
@@ -769,7 +754,7 @@ public class SftpFileSource extends BaseObject implements FileSource {
 	public synchronized  boolean setLastModifiedTime(long time) throws IOException {
 		boolean ret = false;
 		try {
-			int time2 = ((int)time/1000);
+			int time2 = (int)(time/1000);
 			factory.getSftp_().setMtime(path, time2);
 			attr = null;
 			ret = getAttr().getMTime()==time2;
@@ -890,6 +875,11 @@ public class SftpFileSource extends BaseObject implements FileSource {
 			}
 		}
 		return ret ;
+	}
+
+	@Override
+	public int hashCode() {
+		return path.hashCode();
 	}
 
 	@Override
@@ -1114,7 +1104,7 @@ public class SftpFileSource extends BaseObject implements FileSource {
 	public boolean setWritable(boolean writetable, boolean ownerOnly) throws IOException  {
 
 		boolean ret = setWritable(writetable);
-		if(ret && ownerOnly ) {
+		if(ret && !ownerOnly ) {
 			if( (ret=setGroupWritable(writetable))) {
 				ret = setOtherWritable(writetable);
 			}
@@ -1277,7 +1267,7 @@ public class SftpFileSource extends BaseObject implements FileSource {
 
 	@Override
 	public long lastAccessTime() throws IOException {
-		return getAttr().getATime()*1000;
+		return getAttr().getATime()*1000L;
 	}
 
 	@Override
@@ -1290,7 +1280,7 @@ public class SftpFileSource extends BaseObject implements FileSource {
 	public boolean setLastAccessTime(long time) throws IOException {
 		boolean ret = false;
 		try {
-			int time2 = ((int)time/1000);
+			int time2 = (int)(time/1000);
 			factory.getSftp_().setAtime(getAbsolutePath(), time2);			
 			attr = null;
 			ret = getAttr().getATime() == time2;;
