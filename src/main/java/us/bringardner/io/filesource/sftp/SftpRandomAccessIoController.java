@@ -27,10 +27,11 @@
 package us.bringardner.io.filesource.sftp;
 
 import java.io.IOException;
+import java.util.Arrays;
 
-import com.jcraft.jsch.ChannelExec;
 import com.jcraft.jsch.ChannelSftp;
 import com.jcraft.jsch.JSchException;
+import com.jcraft.jsch.SftpException;
 
 import us.bringardner.io.filesource.AbstractRandomAccessIoController;
 import us.bringardner.io.filesource.FileSource;
@@ -65,12 +66,34 @@ public class SftpRandomAccessIoController extends AbstractRandomAccessIoControll
 			ret.start = len;
 			ret.isNew = true;
 		} else {
-			int chunk = (int)(pos/chunkSize);
+			long chunk = pos/chunkSize;
 			ret.start = chunk * chunkSize;
-			ret.data = channel.readFileChunk(getHandle(), ret.start, chunkSize);
-			ret.size = ret.data.length;			
+			ret.data = readFully(ret.start, (int)Math.min(chunkSize, len-ret.start));
+			ret.size = ret.data.length;
 		}
 		return ret;
+	}
+
+	/**
+	 * Reads 'want' bytes starting at 'start'. A server may return fewer bytes
+	 * than asked for, so keep asking until we have them all or reach EOF.
+	 */
+	private byte[] readFully(long start, int want) throws IOException {
+		byte[] ret = new byte[want];
+		int got = 0;
+		while( got < want ) {
+			byte[] part = channel.readFileChunk(getHandle(), start+got, want-got);
+			if( part.length == 0 ) {
+				break; // EOF
+			}
+			System.arraycopy(part, 0, ret, got, part.length);
+			got += part.length;
+		}
+		if( got == 0 ) {
+			throw new IOException("Unexpected end of file at "+start+" (length was "+length()
+					+"); was "+file.getAbsolutePath()+" changed while it was open?");
+		}
+		return got == want ? ret : Arrays.copyOf(ret, got);
 	}
 
 	@Override
@@ -99,38 +122,14 @@ public class SftpRandomAccessIoController extends AbstractRandomAccessIoControll
 	}
 
 
+	/**
+	 * Truncates with an SFTP SETSTAT carrying only the new size. This used to run
+	 * "truncate -s N path" in a shell: the path wasn't quoted, it needed shell
+	 * access, and it guessed the exit status after a fixed 100 ms sleep.
+	 */
 	private void shrinkTo(long newLength) throws IOException {
-		ChannelExec exec = null;
-
-		try {
-			exec = (ChannelExec) myFactory.getSession().openChannel("exec");
-			String cmd = "truncate -s "+newLength+" "+file.getAbsolutePath();
-			exec.setCommand(cmd);	
-			exec.connect();
-			try {
-				Thread.sleep(100);
-			} catch (InterruptedException e) {
-			}
-			int status = exec.getExitStatus();
-			if( status != 0 ) {
-				throw new IOException("Server does not support this function");				
-			}
-
-		} catch (JSchException e) {
-			throw new IOException(e);
-		} finally {
-			if( exec != null ) {
-				try {
-					exec.disconnect();
-				} catch (Exception e2) {
-				}
-			}
-		}
-
-
+		channel.setSize(file.getAbsolutePath(), newLength);
 	}
-
-
 
 	/** The file's size or times changed, so its cached attributes are stale. */
 	private void fileChanged() {
@@ -141,9 +140,41 @@ public class SftpRandomAccessIoController extends AbstractRandomAccessIoControll
 
 	private byte[] getHandle() throws IOException {
 		if( _handle == null ) {
-			_handle = channel.openFile(file.getAbsolutePath());
+			try {
+				_handle = channel.openFile(file.getAbsolutePath());
+			} catch (IOException e) {
+				// No write permission: open it read-only, so it can still be read.
+				// Writes will then fail with the server's error.
+				if( e.getCause() instanceof SftpException 
+						&& ((SftpException) e.getCause()).id == ChannelSftp.SSH_FX_PERMISSION_DENIED) {
+					_handle = channel.openFileForRead(file.getAbsolutePath());
+				} else {
+					throw e;
+				}
+			}
 		}
 		return _handle;
+	}
+
+	/**
+	 * Saves pending changes, then closes the remote file handle and this
+	 * controller's SFTP channel. They used to stay open until the session
+	 * ended, and OpenSSH allows only 10 channels per connection by default.
+	 */
+	@Override
+	public void close() throws Exception {
+		try {
+			super.close();
+		} finally {
+			try {
+				if( _handle != null ) {
+					channel.closeFile(_handle);
+				}
+			} finally {
+				_handle = null;
+				channel.disconnect();
+			}
+		}
 	}
 
 }

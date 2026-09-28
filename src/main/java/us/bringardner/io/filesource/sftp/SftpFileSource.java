@@ -79,9 +79,11 @@ public class SftpFileSource extends BaseObject implements FileSource {
 					this.out = mySftp.put(path, ChannelSftp.OVERWRITE);
 				}
 
-			} catch (JSchException e) {
-				throw new IOException(e);
-			} catch (SftpException e) {
+			} catch (JSchException | SftpException e) {
+				// don't leak the channel when the open fails
+				if( mySftp != null ) {
+					mySftp.disconnect();
+				}
 				throw new IOException(e);
 			}
 
@@ -91,17 +93,26 @@ public class SftpFileSource extends BaseObject implements FileSource {
 			out.write(b);
 		}
 
+		private boolean closed = false;
+
+		/**
+		 * Closing sends the last buffered data and checks the server's replies,
+		 * so an error here (disk full, quota, permission) means the file is
+		 * incomplete. It used to be swallowed; now it's thrown.
+		 */
 		@Override
 		public void close() throws IOException {
+			if( closed ) {
+				return;
+			}
+			closed = true;
 			try {
 				out.close();
-			} catch(Throwable e) {}
-			try {
+			} finally {
 				mySftp.disconnect();
 				clearAttr();
-			} catch (Exception e) {
+				clearParentKids();
 			}
-
 		}
 
 		@Override
@@ -137,10 +148,11 @@ public class SftpFileSource extends BaseObject implements FileSource {
 				mySftp = (ChannelSftp) factory.getSession().openChannel("sftp");
 				mySftp.connect();
 				in = mySftp.get(path);
-
-			} catch (JSchException e) {
-				throw new IOException(e);
-			} catch (SftpException e) {
+			} catch (JSchException | SftpException e) {
+				// don't leak the channel when the open fails
+				if( mySftp != null ) {
+					mySftp.disconnect();
+				}
 				throw new IOException(e);
 			}
 		}
@@ -153,10 +165,11 @@ public class SftpFileSource extends BaseObject implements FileSource {
 				mySftp = (ChannelSftp) factory.getSession().openChannel("sftp");
 				mySftp.connect();
 				in = mySftp.get(path,null,skipTo);
-
-			} catch (JSchException e) {
-				throw new IOException(e);
-			} catch (SftpException e) {
+			} catch (JSchException | SftpException e) {
+				// don't leak the channel when the open fails
+				if( mySftp != null ) {
+					mySftp.disconnect();
+				}
 				throw new IOException(e);
 			}
 
@@ -176,8 +189,9 @@ public class SftpFileSource extends BaseObject implements FileSource {
 		public void close() throws IOException {
 			try {
 				in.close();
-			} catch(Throwable e) {}
-			mySftp.disconnect();
+			} finally {
+				mySftp.disconnect();
+			}
 		}
 
 		@Override
@@ -319,6 +333,13 @@ public class SftpFileSource extends BaseObject implements FileSource {
 		
 		if( monitor != null) monitor.setProgress(monitor.getMaximum());
 		return kids;
+	}
+
+	/** A file was created or removed in the parent directory, so its cached listing is stale. */
+	private void clearParentKids() {
+		if( parent != null ) {
+			parent.dereferenceChilderen();
+		}
 	}
 
 	/** Forget cached attributes, so the next call re-reads them from the server. */

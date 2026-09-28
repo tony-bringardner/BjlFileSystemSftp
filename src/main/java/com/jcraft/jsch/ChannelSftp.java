@@ -3051,7 +3051,17 @@ public class ChannelSftp extends ChannelSession{
 	//********************** Start  tonyb
 	
 	
+	/** Opens a file for reading and writing (it must already exist). */
 	public byte [] openFile(String src) throws IOException {
+		return openFile(src, SSH_FXF_READ | SSH_FXF_WRITE);
+	}
+
+	/** Opens an existing file for reading only. */
+	public byte [] openFileForRead(String src) throws IOException {
+		return openFile(src, SSH_FXF_READ);
+	}
+
+	private byte [] openFile(String src, int flags) throws IOException {
 		byte [] ret = null;
 		try{
 			((MyPipedInputStream)io_in).updateReadSide();
@@ -3061,7 +3071,7 @@ public class ChannelSftp extends ChannelSession{
 	
 			byte[] srcb=Util.str2byte(src, fEncoding);
 	
-			sendOPEN(srcb,SSH_FXF_READ | SSH_FXF_WRITE );
+			sendOPEN(srcb, flags);
 			buf.rewind();
 			Header header=new Header();
 			header=header(buf, header);
@@ -3075,17 +3085,10 @@ public class ChannelSftp extends ChannelSession{
 			}
 			
 			if(type==SSH_FXP_STATUS){
-				//int av = io_in.available();
-				buf.rewind();
-				header=header(buf, header);
-				length=header.length;
-				type=header.type;
-				buf.rewind();
-				fill(buf, length);
-				if( type != SSH_FXP_HANDLE) {
-					int i=buf.getInt();
-					throwStatusError(buf, i);
-				}
+				// The open failed (no such file, permission denied, ...).
+				// It used to wait for another packet here, which never comes, so it hung.
+				int i=buf.getInt();
+				throwStatusError(buf, i);
 			}
 			
 	
@@ -3118,21 +3121,21 @@ public class ChannelSftp extends ChannelSession{
 			}
 			if(type==SSH_FXP_STATUS){
 				fill(buf, rest_length);
-				int i=buf.getInt();    
-				rest_length=0;
+				int i=buf.getInt();
 				if(i==SSH_FX_EOF){
-					return ret;
+					return new byte[0];
 				}
+				// Any other status is an error. It used to fall through and read
+				// the error text as if it were data, which desynchronised the channel.
+				throwStatusError(buf, i);
 			}
 
 			buf.rewind();
 			fill(buf.buffer, 0, 4);
 			int len = buf.getInt();
 			ret = new byte[len];
-			int got = io_in.read(ret);
-			while( got < len) {
-				got += io_in.read(ret,got,len-got);
-			}
+			// fill() throws if the stream closes, instead of looping forever on -1
+			fill(ret, 0, len);
 			
 			
 		} catch (Exception e) {
@@ -3173,6 +3176,27 @@ public class ChannelSftp extends ChannelSession{
 		
 	}
 	
+	/**
+	 * Sets a file's size with an SFTP SETSTAT that carries only the size,
+	 * so no other attribute (owner, permissions, times) is sent.
+	 * OpenSSH truncates or extends the file.
+	 */
+	public void setSize(String path, long size) throws IOException {
+		try {
+			((MyPipedInputStream)io_in).updateReadSide();
+			Buffer empty = new Buffer(4);
+			empty.putInt(0);          // attribute flags: none
+			SftpATTRS attr = SftpATTRS.getATTR(empty);
+			attr.setSIZE(size);
+			_setStat(remoteAbsolutePath(path), attr);
+		} catch (Exception e) {
+			if (e instanceof IOException) {
+				throw (IOException) e;
+			}
+			throw new IOException(e);
+		}
+	}
+
 	public void closeFile(byte [] handle) throws IOException {
 		try {
 			buf.rewind();
