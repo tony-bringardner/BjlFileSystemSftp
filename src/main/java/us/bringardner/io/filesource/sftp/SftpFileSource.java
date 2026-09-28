@@ -291,15 +291,24 @@ public class SftpFileSource extends BaseObject implements FileSource {
 
 		this.parent = parent;
 		this.name = entry.getFilename();
-		this.attr = entry.getAttrs();
 		if( parent.path.equals("/")) {
 			this.path = "/"+this.name;
 		} else {
 			this.path = parent.path+"/"+this.name;
 		}
-		
-		//  We have a list entry so this file MUST exists.
-		this.exists = (true);
+		factory.rememberNames(entry);
+
+		SftpATTRS a = entry.getAttrs();
+		if( a.isLink()) {
+			// A listing describes the link itself. Leave the attributes to be
+			// read with stat(), which follows the link like java.io.File does.
+			this.isLink = true;
+		} else {
+			this.attr = a;
+			this.isLink = false;
+			//  We have a list entry so this file MUST exists.
+			this.exists = (true);
+		}
 	}
 
 	private synchronized SftpFileSource[] getKids(ProgressMonitor monitor) throws IOException {
@@ -318,10 +327,10 @@ public class SftpFileSource extends BaseObject implements FileSource {
 						if( ! (e.getFilename().equals(".") || e.getFilename().equals(".."))) {
 							list.add(new SftpFileSource(factory, this,e));
 						}
-						if( monitor != null) monitor.setProgress((cnt/ls.size())*monitor.getMaximum());
+						if( monitor != null) monitor.setProgress((int)((long)cnt*monitor.getMaximum()/ls.size()));
 					}
 				} catch (SftpException e) {
-					if( e.getMessage().equals("No such file") || e.getMessage().endsWith("not a valid file path")) {
+					if( isNoSuchFile(e)) {
 						exists = (false);
 					} else {
 						throw new IOException(e);
@@ -342,19 +351,40 @@ public class SftpFileSource extends BaseObject implements FileSource {
 		}
 	}
 
+	private synchronized void clearOwner() {
+		attr = null;
+		owner = null;
+		group = null;
+	}
+
 	/** Forget cached attributes, so the next call re-reads them from the server. */
 	synchronized void clearAttr()  {
 		attr = null;
 		exists = null;
 	}
 
+	/**
+	 * True when the server says the file doesn't exist. Uses the SFTP status
+	 * code, not the message text, which differs between servers
+	 * ("No such file", "No such file or directory", "File not found", ...).
+	 */
+	static boolean isNoSuchFile(SftpException e) {
+		return e.id == ChannelSftp.SSH_FX_NO_SUCH_FILE
+				|| (e.getMessage() != null && e.getMessage().endsWith("not a valid file path"));
+	}
+
+	/**
+	 * The file's attributes, following symbolic links like java.io.File does:
+	 * a link to a directory is a directory, and a link whose target is missing
+	 * doesn't exist. Returns null if the file doesn't exist.
+	 */
 	private synchronized SftpATTRS getAttr() throws IOException {
 		if( attr == null ) {
 			try {
-				attr = factory.lstat(path);
+				attr = factory.stat(path);
 				exists = (true);
 			} catch (SftpException e) {
-				if( e.getMessage().equals("No such file") || e.getMessage().endsWith("not a valid file path")) {
+				if( isNoSuchFile(e)) {
 					exists = (false);
 				} else {
 					throw new IOException(e);
@@ -362,6 +392,41 @@ public class SftpFileSource extends BaseObject implements FileSource {
 			}
 		}
 		return attr;
+	}
+
+	/** Attributes of the path itself, without following a link; null if there's nothing there. */
+	private SftpATTRS getLinkAttr() throws IOException {
+		try {
+			return factory.lstat(path);
+		} catch (SftpException e) {
+			if( isNoSuchFile(e)) {
+				return null;
+			}
+			throw new IOException(e);
+		}
+	}
+
+	/**
+	 * Permission check against the remote user from whoAmI(). Root can read
+	 * and write anything, and execute anything with an execute bit set.
+	 */
+	private boolean hasPermission(int ownerBit) throws IOException {
+		SftpATTRS a = getAttr();
+		if( a == null ) {
+			return false;
+		}
+		int perm = a.getPermissions();
+		FileSourceUser me = factory.whoAmI();
+		if( me.getId() == 0 ) {
+			return ownerBit != 0100 || (perm & 0111) != 0;
+		}
+		if( me.getId() == a.getUId()) {
+			return (perm & ownerBit) != 0;
+		}
+		if( me.hasGroup(a.getGId())) {
+			return (perm & (ownerBit >> 3)) != 0;
+		}
+		return (perm & (ownerBit >> 6)) != 0;
 	}
 	
 	/**
@@ -374,21 +439,8 @@ public class SftpFileSource extends BaseObject implements FileSource {
 	 */
 	@Override
 	public boolean canExecute() throws IOException {
-		try {
-
-			FileSourceUser me = getFileSourceFactory().whoAmI();
-			attr = getAttr();
-			if( me.getId()==attr.getUId()) {
-				return canOwnerExecute();
-			}
-			if( me.hasGroup(attr.getGId())) {
-				return canGroupExecute();
-			}						
-			return canOtherExecute();
-			
-		} catch (Exception e) {
-		}
-		return false;
+		// Connection and server errors are thrown; they used to be swallowed as "false".
+		return hasPermission(0100);
 	}
 
 
@@ -403,21 +455,9 @@ public class SftpFileSource extends BaseObject implements FileSource {
 	 * 
 	 */
 	@Override
-	public boolean canRead() throws IOException  {		
-		try {
-
-			FileSourceUser me = getFileSourceFactory().whoAmI();
-			attr = getAttr();
-			if( me.getId()==attr.getUId()) {
-				return canOwnerRead();
-			}
-			if( me.hasGroup(attr.getGId())) {
-				return canGroupRead();
-			}
-			return canOtherRead();
-		} catch (Exception e) {
-		}
-		return false;
+	public boolean canRead() throws IOException {
+		// Connection and server errors are thrown; they used to be swallowed as "false".
+		return hasPermission(0400);
 	}
 
 	/**
@@ -430,21 +470,8 @@ public class SftpFileSource extends BaseObject implements FileSource {
 	 */
 	@Override
 	public boolean canWrite() throws IOException {
-		try {
-
-			FileSourceUser me = getFileSourceFactory().whoAmI();
-			attr = getAttr();
-			if( attr.getUId()==me.getId()) {
-				return canOwnerWrite();
-			}
-			if( me.hasGroup(attr.getGId())) {
-				return canGroupWrite();
-			}
-			return canOtherWrite();
-			
-		} catch (Exception e) {
-		}
-		return false;
+		// Connection and server errors are thrown; they used to be swallowed as "false".
+		return hasPermission(0200);
 	}
 
 	@Override
@@ -558,7 +585,11 @@ public class SftpFileSource extends BaseObject implements FileSource {
 	public synchronized boolean delete() throws IOException {
 		boolean ret = false;
 		try {
-			if( isDirectory() ) {
+			SftpATTRS self = getLinkAttr();   // the path itself, so a link is removed, not its target
+			if( self == null ) {
+				return false;   // like java.io.File: nothing to delete
+			}
+			if( self.isDir() ) {
 				factory.sftp(c -> { c.rmdir(path); return null; });
 			} else {
 				factory.sftp(c -> { c.rm(path); return null; });
@@ -921,7 +952,12 @@ public class SftpFileSource extends BaseObject implements FileSource {
 	@Override
 	public  synchronized void refresh() throws IOException {
 		attr = null;
+		exists = null;
 		kids = null;
+		isLink = null;
+		linkedTo = null;
+		owner = null;
+		group = null;
 		getAttr();
 
 	}
@@ -938,23 +974,25 @@ public class SftpFileSource extends BaseObject implements FileSource {
 	}
 
 	@Override
-	public FileSource getLinkedTo() throws IOException {
-		if( isLink == null ) {
-			if( exists()) {
-				if( !getAttr().isLink()) {
-					isLink = false;
-				} else {
-					isLink = true;
-					try {
-						String str = factory.readlink(path);
-						linkedTo = factory.createFileSource(str);
-					} catch (SftpException e) {
-						throw new IOException(e);
-					}	
+	public synchronized FileSource getLinkedTo() throws IOException {
+		if( isLink == null || (isLink && linkedTo == null)) {
+			SftpATTRS self = getLinkAttr();
+			isLink = self != null && self.isLink();
+			if( isLink ) {
+				try {
+					String target = factory.readlink(path);
+					if( !target.startsWith("/")) {
+						// a relative target is relative to the link's own directory
+						String dir = getParent();
+						target = (dir == null ? "" : dir) + "/" + target;
+					}
+					linkedTo = factory.createFileSource(target);
+				} catch (SftpException e) {
+					throw new IOException(e);
 				}
 			}
 		}
-		return linkedTo;
+		return isLink ? linkedTo : null;
 	}
 
 	@Override
@@ -967,316 +1005,135 @@ public class SftpFileSource extends BaseObject implements FileSource {
 		throw new IOException("ISeekableInputStream not implemented");
 	}
 
-	FileSourceUser principle;
-	
-	private FileSourceUser getPrinciple() {
-		
-		if( principle == null && factory.isConnected() ) {
-			try {
-				// we need the user and group names
-				Vector<LsEntry> e1 = factory.ls(getAbsolutePath());
-				if( e1 !=null && e1.size()>0) {
-					LsEntry e = e1.get(0);
-					String tmp = e.toString();
-					while(tmp.indexOf("  ")>0) {
-						tmp = tmp.replaceAll("  ", " ");
-					}
-
-					String [] parts = tmp.split("\\s");
-					if( parts.length>=4) {
-						String user = parts[2];
-						String groupName = parts[3];
-						SftpATTRS a = getAttr();
-						FileSourceUser p = new FileSourceUser(a.getUId(),user,a.getGId(),groupName);
-						principle = p;
+	/**
+	 * The file's owner and group. SFTP gives only numeric ids, so the names
+	 * come from the ls-style long listing; the factory remembers them from
+	 * every listing, so usually this costs nothing. It used to list the file's
+	 * own path, which for a directory listed its children and took the first
+	 * entry's owner.
+	 */
+	@Override
+	public synchronized FileSourceUser getOwner() throws IOException {
+		if( owner == null ) {
+			SftpATTRS a = getAttr();
+			if( a == null ) {
+				return new FileSourceUser();
+			}
+			String userName = factory.userName(a.getUId());
+			String groupName = factory.groupName(a.getGId());
+			if( userName == null || groupName == null ) {
+				// look the names up in the directory that lists this file
+				String dir = getParent();
+				try {
+					factory.ls(dir == null ? path : dir);   // remembers every entry's names
+				} catch (SftpException e) {
+					if( !isNoSuchFile(e) && e.id != ChannelSftp.SSH_FX_PERMISSION_DENIED) {
+						throw new IOException(e);
 					}
 				}
-
-			} catch (Throwable e) {
-				
+				userName = factory.userName(a.getUId());
+				groupName = factory.groupName(a.getGId());
 			}
+			owner = new FileSourceUser(a.getUId(), userName == null ? ""+a.getUId() : userName,
+					a.getGId(), groupName == null ? ""+a.getGId() : groupName);
 		}
-		
-		return principle != null ? principle : new FileSourceUser();
-	}
-
-	@Override
-	public FileSourceUser getOwner() throws IOException {
-
-		if(owner == null ) {
-			synchronized (this) {
-				owner = getPrinciple();
-			}
-		}
-
 		return owner;
 	}
 
 	@Override
-	public GroupPrincipal getGroup() throws IOException {
+	public synchronized GroupPrincipal getGroup() throws IOException {
 		if( group == null ) {
-			synchronized (this) {
-				if( group == null ) {
-					group = getOwner().getGroup();
-				}
-			}
+			group = getOwner().getGroup();
 		}
 		return group;
 	}
 
-	@Override
-	public boolean setExecutable(boolean b) throws IOException {
-		try {
-
-			int perm = getAttr().getPermissions() & 0b111111111;
-			int p2 = -1;
-			if( b ) {
-				p2 = perm | 0b001000000;					
-			} else {
-				p2 = perm & 0b110111111;
-			}
-
-			if( p2 != perm) {								
-				final int mode = p2;
-				factory.sftp(c -> { c.chmod(mode, path); return null; });
-				attr = null;
-			}			
-			return true;
-		} catch (SftpException e) {
+	/**
+	 * Sets and clears permission bits with a single chmod. Keeps the
+	 * setuid/setgid/sticky bits (the old code masked them off). Returns false
+	 * if the file doesn't exist or the server refuses.
+	 */
+	private boolean changeMode(int set, int clear) throws IOException {
+		SftpATTRS a = getAttr();
+		if( a == null ) {
 			return false;
 		}
+		int perm = a.getPermissions() & 07777;
+		int mode = (perm | set) & ~clear;
+		if( mode != perm ) {
+			try {
+				factory.sftp(c -> { c.chmod(mode, path); return null; });
+			} catch (SftpException e) {
+				return false;
+			} finally {
+				clearAttr();
+			}
+		}
+		return true;
+	}
+
+	private boolean changeMode(boolean on, int bits) throws IOException {
+		return on ? changeMode(bits, 0) : changeMode(0, bits);
 	}
 
 	@Override
-	public boolean setReadable(boolean readable) throws IOException {
-		try {
-			int perm = getAttr().getPermissions() & 0b111111111;
-			int r2 = -1;
-			if( readable ) {
-				r2 = perm | 0b100000000;					
-			} else {
-				r2 = perm & 0b011111111;
-			}			
+	public boolean setExecutable(boolean b) throws IOException {
+		return changeMode(b, 0100);
+	}
 
-			if( r2 != perm) {								
-				final int mode = r2;
-				factory.sftp(c -> { c.chmod(mode, path); return null; });
-				attr = null;
-			}		
-			return true;
-		} catch (SftpException e) {
-			return false;
-		}
-
+	@Override
+	public boolean setReadable(boolean b) throws IOException {
+		return changeMode(b, 0400);
 	}
 
 	@Override
 	public boolean setWritable(boolean b) throws IOException {
-		try {
-			int perm = getAttr().getPermissions() & 0b111111111;
-			int r2 = -1;
-			if( b ) {
-				r2 = perm | 0b010000000;					
-			} else {
-				r2 = perm & 0b101111111;
-			}
-
-			if( r2 != perm) {								
-				final int mode = r2;
-				factory.sftp(c -> { c.chmod(mode, path); return null; });
-				attr = null;
-			}			
-			return true;
-		} catch (SftpException e) {
-			return false;
-		}
-
+		return changeMode(b, 0200);
 	}
 
 	@Override
-	public boolean setExecutable(boolean executable, boolean ownerOnly) throws IOException {
-		boolean ret = setExecutable(executable);
-		if(ret && !ownerOnly ) {
-			ret = setGroupExecutable(executable);
-			if( ret ) {
-				ret = setOtherExecutable(executable);
-			}
-		} 
-		if( ret ) {
-			attr = null;
-		}
-		return ret;
+	public boolean setExecutable(boolean b, boolean ownerOnly) throws IOException {
+		return changeMode(b, ownerOnly ? 0100 : 0111);
 	}
 
 	@Override
-	public boolean setReadable(boolean readable, boolean ownerOnly) throws IOException {
-		boolean ret = setReadable(readable);
-		if(ret && !ownerOnly ) {
-			if( ret = setGroupReadable(readable)) {
-				ret = setOtherReadable(readable);
-			}
-		} 	
-		if( ret ) {
-			attr = null;
-		}
-		return ret;
+	public boolean setReadable(boolean b, boolean ownerOnly) throws IOException {
+		return changeMode(b, ownerOnly ? 0400 : 0444);
 	}
 
-
 	@Override
-	public boolean setWritable(boolean writetable, boolean ownerOnly) throws IOException  {
-
-		boolean ret = setWritable(writetable);
-		if(ret && !ownerOnly ) {
-			if( (ret=setGroupWritable(writetable))) {
-				ret = setOtherWritable(writetable);
-			}
-		}
-		if( ret ) {
-			attr = null;
-		}
-		return ret;
+	public boolean setWritable(boolean b, boolean ownerOnly) throws IOException  {
+		return changeMode(b, ownerOnly ? 0200 : 0222);
 	}
 
 	@Override
 	public boolean setGroupReadable(boolean b) throws IOException {
-		try {
-
-			int perm = getAttr().getPermissions() & 0b111111111;
-			int r2 = -1;
-			if( b ) {
-				r2 = perm | 0b000100000;					
-			} else {
-				r2 = perm & 0b111011111;
-			}
-
-			if( r2 != perm) {								
-				final int mode = r2;
-				factory.sftp(c -> { c.chmod(mode, path); return null; });
-				attr = null;
-			}						
-			return true;
-		} catch (SftpException e) {		
-			return false;
-		}
+		return changeMode(b, 0040);
 	}
 
 	@Override
 	public boolean setGroupWritable(boolean b) throws IOException {
-		try {
-
-			int perm = getAttr().getPermissions() & 0b111111111;
-
-			int r2 = -1;
-			if( b ) {
-				r2 = perm | 0b000010000;					
-			} else {
-				r2 = perm & 0b111101111;
-			}
-
-			if( r2 != perm) {								
-				final int mode = r2;
-				factory.sftp(c -> { c.chmod(mode, path); return null; });
-				attr = null;
-			}				
-			return true;
-		} catch (SftpException e) {		
-			return false;
-		}
+		return changeMode(b, 0020);
 	}
 
 	@Override
 	public boolean setGroupExecutable(boolean b) throws IOException {
-		try {
-			int perm = getAttr().getPermissions() & 0b111111111;
-
-			int r2 = -1;
-			if( b ) {
-				r2 = perm | 0b000001000;					
-			} else {
-				r2 = perm & 0b111110111;
-			}
-
-			if( r2 != perm) {								
-				final int mode = r2;
-				factory.sftp(c -> { c.chmod(mode, path); return null; });
-				attr = null;
-			}			
-			return true;
-		} catch (SftpException  e) {
-			return false;
-		}
+		return changeMode(b, 0010);
 	}
 
 	@Override
 	public boolean setOtherReadable(boolean b) throws IOException {
-		try {
-			int perm = getAttr().getPermissions() & 0b111111111;
-
-			int r2 = -1;
-			if( b ) {
-				r2 = perm | 0b000000100;					
-			} else {
-				r2 = perm & 0b111111011;
-			}
-
-			if( r2 != perm) {								
-				final int mode = r2;
-				factory.sftp(c -> { c.chmod(mode, path); return null; });
-				attr = null;
-			}			
-			return true;
-		} catch (SftpException e) {		
-			return false;
-		}
+		return changeMode(b, 0004);
 	}
 
 	@Override
 	public boolean setOtherWritable(boolean b) throws IOException {
-		try {
-
-			int perm = getAttr().getPermissions() & 0b111111111;
-
-			int r2 = -1;
-			if( b ) {
-				r2 = perm | 0b000000010;					
-			} else {
-				r2 = perm & 0b111111101;
-			}
-
-			if( r2 != perm) {								
-				final int mode = r2;
-				factory.sftp(c -> { c.chmod(mode, path); return null; });
-				attr = null;
-			}			
-			return true;
-		} catch (SftpException e) {		
-			return false;
-		}
+		return changeMode(b, 0002);
 	}
 
 	@Override
 	public boolean setOtherExecutable(boolean b) throws IOException {
-		try {
-
-			int perm = getAttr().getPermissions() & 0b111111111;
-
-			int r2 = -1;
-			if( b ) {
-				r2 = perm | 0b000000001;					
-			} else {
-				r2 = perm & 0b111111110;
-			}
-
-			if( r2 != perm) {								
-				final int mode = r2;
-				factory.sftp(c -> { c.chmod(mode, path); return null; });
-				attr = null;
-			}			
-			return true;
-		} catch (SftpException e) {		
-			return false;
-		}
+		return changeMode(b, 0001);
 	}
 
 	@Override
@@ -1332,6 +1189,7 @@ public class SftpFileSource extends BaseObject implements FileSource {
 			int gid =  ((FileSourceGroup) group).getId();
 			try {
 				factory.sftp(c -> { c.chgrp(gid, path); return null; });
+				clearOwner();
 				return true;
 			} catch (SftpException e) {
 				throw new IOException(e);
@@ -1346,6 +1204,7 @@ public class SftpFileSource extends BaseObject implements FileSource {
 			int uid = ((FileSourceUser) owner).getId();
 			try {
 				factory.sftp(c -> { c.chown(uid, path); return null; });
+				clearOwner();
 				return true;
 			} catch (SftpException e) {
 				throw new IOException(e);

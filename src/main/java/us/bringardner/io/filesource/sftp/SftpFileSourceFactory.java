@@ -38,6 +38,7 @@ import java.util.HashMap;
 import java.util.Map;
 import java.util.Properties;
 import java.util.Vector;
+import java.util.concurrent.ConcurrentHashMap;
 
 import com.jcraft.jsch.ChannelExec;
 import com.jcraft.jsch.ChannelSftp;
@@ -156,7 +157,17 @@ public class SftpFileSourceFactory extends FileSourceFactory {
 	private FileSource[] roots;
 	private FileSource currentDir;
 
-	private int chunkSize=1024*4;
+	/**
+	 * Bytes per random-access read or write. Each chunk is one round trip, so
+	 * bigger is faster over a network; OpenSSH serves up to 256 KB per read.
+	 * Was 4 KB.
+	 */
+	public static final int DEFAULT_CHUNK_SIZE = 32*1024;
+	private int chunkSize=DEFAULT_CHUNK_SIZE;
+
+	/** uid -> user name and gid -> group name, learned from directory listings. */
+	private final Map<Integer,String> userNames = new ConcurrentHashMap<>();
+	private final Map<Integer,String> groupNames = new ConcurrentHashMap<>();
 
 	public SftpFileSourceFactory() {
 		super();
@@ -597,11 +608,47 @@ public class SftpFileSourceFactory extends FileSourceFactory {
 
 	
 	public Vector<ChannelSftp.LsEntry> ls(String path) throws IOException, SftpException {
-		return sftp(c -> c.ls(path));
+		Vector<ChannelSftp.LsEntry> ret = sftp(c -> c.ls(path));
+		for (ChannelSftp.LsEntry e : ret) {
+			rememberNames(e);
+		}
+		return ret;
 	}
 
 	public SftpATTRS lstat(String path) throws SftpException, IOException {
 		return sftp(c -> c.lstat(path));
+	}
+
+	/** Like lstat, but follows symbolic links. */
+	public SftpATTRS stat(String path) throws SftpException, IOException {
+		return sftp(c -> c.stat(path));
+	}
+
+	/**
+	 * Remembers the owner and group names from an entry's ls-style long name
+	 * ("-rw-r--r--  1 alice staff  12 Sep 28 12:00 name").
+	 */
+	void rememberNames(ChannelSftp.LsEntry e) {
+		String longName = e.getLongname();
+		SftpATTRS a = e.getAttrs();
+		if( longName == null || a == null ) {
+			return;
+		}
+		String[] parts = longName.trim().split("\\s+");
+		if( parts.length >= 4 ) {
+			userNames.putIfAbsent(a.getUId(), parts[2]);
+			groupNames.putIfAbsent(a.getGId(), parts[3]);
+		}
+	}
+
+	/** User name for a uid, if a listing has shown it; otherwise null. */
+	String userName(int uid) {
+		return userNames.get(uid);
+	}
+
+	/** Group name for a gid, if a listing has shown it; otherwise null. */
+	String groupName(int gid) {
+		return groupNames.get(gid);
 	}
 
 	public String readlink(String path) throws SftpException, IOException {
@@ -646,22 +693,47 @@ public class SftpFileSourceFactory extends FileSourceFactory {
 
 
 	FileSourceUser remotePrinciple;
+
+	/**
+	 * The remote user, with uid and groups, from running "id" on the server.
+	 * Accounts without shell access (internal-sftp, chroot) can't run it; then
+	 * the uid and primary group come from the owner of the login directory,
+	 * which is the account itself on a normal setup. Its other groups are
+	 * unknown in that case. This used to fall back to the LOCAL user, so
+	 * permission checks compared remote files with a local uid.
+	 */
 	@Override
 	public FileSourceUser whoAmI() {
 		if( remotePrinciple !=null ) {
 			return remotePrinciple;
 		}
 
-		if( isConnected()) {
-			try {
-				String tmp = runCommand("id");
-				FileSourceUser p = FileSourceUser.fromId(tmp);
-				if( p !=null ) {
-					remotePrinciple = p;
-					return p;
-				}
-			} catch (IOException e) {
+		try {
+			connect();
+		} catch (IOException e) {
+			logDebug("whoAmI: can't connect: "+e);
+			return super.whoAmI();
+		}
+
+		try {
+			String id = runCommand("id");
+			FileSourceUser p = id == null ? null : FileSourceUser.fromId(id);
+			if( p !=null ) {
+				remotePrinciple = p;
+				return p;
 			}
+		} catch (IOException e) {
+			logDebug("whoAmI: 'id' failed, using the login directory's owner: "+e.getMessage());
+		}
+
+		try {
+			SftpATTRS home = sftp(c -> c.stat(c.getHome()));
+			String groupName = groupName(home.getGId());
+			remotePrinciple = new FileSourceUser(home.getUId(), getUser(),
+					home.getGId(), groupName == null ? ""+home.getGId() : groupName);
+			return remotePrinciple;
+		} catch (IOException | SftpException e) {
+			logDebug("whoAmI: can't read the login directory: "+e);
 		}
 
 		return super.whoAmI();
