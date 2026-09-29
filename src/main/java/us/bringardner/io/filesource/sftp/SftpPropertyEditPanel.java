@@ -43,6 +43,8 @@ import javax.swing.JPanel;
 import javax.swing.JPasswordField;
 import javax.swing.JRadioButton;
 import javax.swing.JScrollPane;
+import javax.swing.JSpinner;
+import javax.swing.SpinnerNumberModel;
 import javax.swing.JTextArea;
 import javax.swing.JTextField;
 import javax.swing.border.TitledBorder;
@@ -75,6 +77,8 @@ public class SftpPropertyEditPanel extends JPanel implements IConnectionProperti
 	private JPanel userPanel;
 	private JPanel hostPortPanel;
 	private JScrollPane scrollPane;
+	/** Milliseconds a file's details are cached (SftpFileSourceFactory.PROP_ATTRIBUTE_CACHE_TTL). */
+	private JSpinner cacheTtlSpinner;
 	
 	public static void main(String args[] ) throws InterruptedException {
 		FactoryPropertiesDialog dialog = new FactoryPropertiesDialog();
@@ -150,6 +154,33 @@ public class SftpPropertyEditPanel extends JPanel implements IConnectionProperti
 		hostPortPanel.add(portTextField);
 		portTextField.setText(""+DEFAULT_PORT);
 		portTextField.setColumns(10);
+
+		JPanel cachePanel = new JPanel();
+		cachePanel.setLayout(new FlowLayout(FlowLayout.LEFT, 5, 5));
+		northPanel.add(cachePanel);
+
+		String cacheTip = "<html>How long a file's details (exists, size, times, type, owner) are<br>"
+				+ "reused before the server is asked again. Directory listings are<br>"
+				+ "never cached.<br><br>"
+				+ "0 = always ask the server (like java.io.File)<br>"
+				+ "-1 = keep until refresh()</html>";
+		JLabel cacheLabel = new JLabel("Cache file details for: ");
+		cacheLabel.setToolTipText(cacheTip);
+		cachePanel.add(cacheLabel);
+
+		// A spinner only accepts whole numbers in range, so the dialog can't be
+		// given a value that setConnectionProperties would reject.
+		cacheTtlSpinner = new JSpinner(new SpinnerNumberModel(
+				(int) Math.max(-1, Math.min(Integer.MAX_VALUE, SftpFileSourceFactory.defaultAttributeCacheTtl())),
+				-1, Integer.MAX_VALUE, 500));
+		cacheTtlSpinner.setEditor(new JSpinner.NumberEditor(cacheTtlSpinner, "0"));   // plain digits, no "2,000"
+		((JSpinner.DefaultEditor) cacheTtlSpinner.getEditor()).getTextField().setColumns(8);
+		cacheTtlSpinner.setToolTipText(cacheTip);
+		cachePanel.add(cacheTtlSpinner);
+
+		JLabel cacheHint = new JLabel("ms   (0 = always ask the server, -1 = until refresh)");
+		cacheHint.setToolTipText(cacheTip);
+		cachePanel.add(cacheHint);
 		
 		JPanel authTypePanel = new JPanel();
 		FlowLayout flowLayout_1 = (FlowLayout) authTypePanel.getLayout();
@@ -292,6 +323,24 @@ public class SftpPropertyEditPanel extends JPanel implements IConnectionProperti
 		passwordField.setText(p.getProperty(SftpFileSourceFactory.PROP_PASSWORD,""));
 		fileNameTextField.setText(p.getProperty(SftpFileSourceFactory.PROP_PRIVATE_KEY_FILE_NAME,""));
 		privateKeyTextArea.setText(p.getProperty(SftpFileSourceFactory.PROP_PRIVATE_KEY,""));
+		cacheTtlSpinner.setValue(cacheTtl(p.getProperty(SftpFileSourceFactory.PROP_ATTRIBUTE_CACHE_TTL)));
+	}
+
+	/**
+	 * The spinner value for a property value: the number, with any negative
+	 * shown as -1 (they all mean "until refresh"); the default if it's
+	 * missing or not a number.
+	 */
+	static int cacheTtl(String value) {
+		long ttl = SftpFileSourceFactory.defaultAttributeCacheTtl();
+		if( value != null && !value.trim().isEmpty()) {
+			try {
+				ttl = Long.parseLong(value.trim());
+			} catch (NumberFormatException e) {
+				// keep the default
+			}
+		}
+		return (int) Math.max(-1, Math.min(Integer.MAX_VALUE, ttl));
 	}
 
 	@Override
@@ -303,6 +352,12 @@ public class SftpPropertyEditPanel extends JPanel implements IConnectionProperti
 		ret.setProperty(SftpFileSourceFactory.PROP_PASSWORD, new String(passwordField.getPassword()));
 		ret.setProperty(SftpFileSourceFactory.PROP_PRIVATE_KEY_FILE_NAME, fileNameTextField.getText());
 		ret.setProperty(SftpFileSourceFactory.PROP_PRIVATE_KEY, privateKeyTextArea.getText());
+		try {
+			cacheTtlSpinner.commitEdit();   // take a value typed but not yet confirmed
+		} catch (java.text.ParseException e) {
+			// not a valid number: the spinner keeps its last good value
+		}
+		ret.setProperty(SftpFileSourceFactory.PROP_ATTRIBUTE_CACHE_TTL, ""+cacheTtlSpinner.getValue());
 
 		return ret;
 	}
