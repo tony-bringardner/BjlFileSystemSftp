@@ -631,21 +631,39 @@ public class SftpFileSourceFactory extends FileSourceFactory {
 				}
 			}
 		} else {
-			String parts[] = auth.split("[@]");
-			if( parts.length > 1) {
-				auth = parts[1];
-				parts = parts[0].split("[:]");
-				setUser(parts[0]);
-				if( parts.length>1) {
-					setPassword(parts[1]);
+			// user[:password]@host[:port]; the host starts after the LAST '@',
+			// and the password after the FIRST ':' of the user part, so a raw
+			// '@' or ':' in a password still works.
+			int at = auth.lastIndexOf('@');
+			if( at >= 0 ) {
+				String userInfo = auth.substring(0, at);
+				auth = auth.substring(at+1);
+				int colon = userInfo.indexOf(':');
+				if( colon >= 0 ) {
+					setUser(decode(userInfo.substring(0, colon)));
+					setPassword(decode(userInfo.substring(colon+1)));
+				} else {
+					setUser(decode(userInfo));
 				}
 			}
 			// now only host & port left
-			parts = auth.split("[:]");
+			String parts[] = auth.split("[:]");
 			setHost(parts[0]);
 			if( parts.length>1) {
 				setPort(Integer.parseInt(parts[1]));
 			}
+		}
+	}
+
+	/**
+	 * Percent-decodes one part of a URL, so "me%40corp" is "me@corp". A '+'
+	 * stays a '+': it only means a space in HTML form data, not in URLs.
+	 */
+	static String decode(String s) {
+		try {
+			return java.net.URLDecoder.decode(s.replace("+", "%2B"), StandardCharsets.UTF_8.name());
+		} catch (java.io.UnsupportedEncodingException | IllegalArgumentException e) {
+			return s;   // not valid percent-encoding: use it as it is
 		}
 	}
 
@@ -658,12 +676,16 @@ public class SftpFileSourceFactory extends FileSourceFactory {
 		setPort(Integer.parseInt(p.getProperty(PROP_PORT,""+getPort())));
 		setUser(p.getProperty(PROP_USER,getUser()));
 		setPassword(p.getProperty(PROP_PASSWORD,getPassword()));
-		privateKeyFileName = p.getProperty("identityFile");
-		String tmp = p.getProperty("privateKey");
-		if( tmp != null && !tmp.isEmpty()) {
-			privateKey = tmp.getBytes();
-		} else {
-			privateKey = null;
+		// Only settings present in 'p' change; an empty value clears one. (These
+		// two used to be cleared whenever they were missing, so changing any
+		// one setting forgot the key.)
+		if( p.containsKey(PROP_PRIVATE_KEY_FILE_NAME)) {
+			String file = p.getProperty(PROP_PRIVATE_KEY_FILE_NAME);
+			privateKeyFileName = file == null || file.isEmpty() ? null : file;
+		}
+		if( p.containsKey(PROP_PRIVATE_KEY)) {
+			String key = p.getProperty(PROP_PRIVATE_KEY);
+			privateKey = key == null || key.isEmpty() ? null : key.getBytes(StandardCharsets.UTF_8);
 		}
 		String kh = p.getProperty(PROP_KNOWN_HOSTS, knownHosts);
 		knownHosts = kh == null || kh.isEmpty() ? null : kh;

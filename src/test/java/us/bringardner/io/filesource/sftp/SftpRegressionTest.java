@@ -435,6 +435,68 @@ public class SftpRegressionTest {
 		}
 	}
 
+	// ============================================================ batch 10
+
+	/** Changing any one setting cleared the private key file and the key itself. */
+	@Test
+	void partialPropertiesKeepTheKey() {
+		SftpFileSourceFactory f = new SftpFileSourceFactory();
+		f.setPrivateKeyFileName("/home/me/.ssh/id_ed25519");
+		f.setPrivateKey("KEY".getBytes());
+
+		Properties only = new Properties();
+		only.setProperty(SftpFileSourceFactory.PROP_CONNECT_TIMEOUT, "5000");
+		f.setConnectionProperties(only);
+		assertEquals(5000, f.getConnectTimeout());
+		assertEquals("/home/me/.ssh/id_ed25519", f.getPrivateKeyFileName(), "kept when not given");
+		assertArrayEquals("KEY".getBytes(), f.getPrivateKey(), "kept when not given");
+
+		Properties clear = new Properties();
+		clear.setProperty(SftpFileSourceFactory.PROP_PRIVATE_KEY_FILE_NAME, "");
+		clear.setProperty(SftpFileSourceFactory.PROP_PRIVATE_KEY, "");
+		f.setConnectionProperties(clear);
+		assertEquals(null, f.getPrivateKeyFileName(), "an empty value clears it");
+		assertEquals(null, f.getPrivateKey());
+	}
+
+	/** User and password in an sftp:// URL weren't percent-decoded. */
+	@Test
+	void urlUserAndPasswordAreDecoded() throws Exception {
+		SftpFileSourceFactory f = new SftpFileSourceFactory();
+		f.setConnectionProperties(new java.net.URL(null, "sftp://me%40corp:p%40ss%3Aw+rd@files.example.com:2222/x", new Handler()));
+		assertEquals("me@corp", f.getUser());
+		assertEquals("p@ss:w+rd", f.getPassword(), "'+' is not a space in a URL");
+		assertEquals("files.example.com", f.getHost());
+		assertEquals(2222, f.getPort());
+
+		SftpFileSourceFactory g = new SftpFileSourceFactory();
+		g.setConnectionProperties(new java.net.URL(null, "sftp://bob@example.com/", new Handler()));
+		assertEquals("bob", g.getUser());
+		assertEquals("example.com", g.getHost());
+	}
+
+	/** JSch's connection thread wasn't a daemon, so a program that forgot disConnect() never exited. */
+	@ParameterizedTest
+	@ValueSource(strings = {"jsch", "mina"})
+	void libraryThreadsDoNotKeepTheProgramAlive(String impl) throws IOException {
+		java.util.Set<Thread> before = Thread.getAllStackTraces().keySet();
+		SftpFileSourceFactory f = newFactory(impl, PASSWORD);
+		f.setSessionKey("daemon-check-"+impl+"-"+System.nanoTime());   // a session of its own
+		f.connect();
+		try {
+			f.createFileSource(DIR).exists();
+			List<String> nonDaemon = new ArrayList<>();
+			for (Thread t : Thread.getAllStackTraces().keySet()) {
+				if( !before.contains(t) && t.isAlive() && !t.isDaemon()) {
+					nonDaemon.add(t.getName());
+				}
+			}
+			assertEquals(List.of(), nonDaemon, "threads that would keep the JVM running");
+		} finally {
+			f.disConnect();
+		}
+	}
+
 	// ============================================================ batch 4
 
 	/** A link to a directory wasn't a directory and couldn't be listed. */

@@ -46,6 +46,9 @@ public class JschProvider implements SshProvider {
 			if( s.serverAliveIntervalMs > 0 ) {
 				session.setServerAliveInterval(s.serverAliveIntervalMs);
 			}
+			// JSch's connection thread isn't a daemon by default, so a program that
+			// forgot disConnect() never exited. MINA's threads already are.
+			session.setDaemonThread(true);
 			session.connect(s.connectTimeoutMs);
 			return new JschConnection(session, s.connectTimeoutMs);
 		} catch (JSchException e) {
