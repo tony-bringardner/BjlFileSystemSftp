@@ -501,14 +501,17 @@ public class SftpFileSource extends BaseObject implements FileSource {
 		return hasPermission(0200);
 	}
 
+	/**
+	 * Orders by absolute path, consistent with equals(). It used to compare
+	 * with the other object's toString() and, on an error, print a stack
+	 * trace and return -1, which breaks sorting (a < b and b < a).
+	 *
+	 * @throws NullPointerException if o is null, as Comparable requires
+	 */
 	@Override
 	public int compareTo(Object o) {
-		try {
-			return getCanonicalPath().compareTo(o.toString());
-		} catch (IOException e) {
-			e.printStackTrace();
-			return -1;
-		}
+		String other = o instanceof FileSource ? ((FileSource) o).getAbsolutePath() : o.toString();
+		return path.compareTo(other);
 	}
 
 	@Override
@@ -951,11 +954,7 @@ public class SftpFileSource extends BaseObject implements FileSource {
 
 	@Override
 	public String toString() {
-		try {
-			return getCanonicalPath();
-		} catch (IOException e) {
-			throw new RuntimeException(e);
-		}
+		return path;
 	}
 
 	@Override
@@ -1087,8 +1086,13 @@ public class SftpFileSource extends BaseObject implements FileSource {
 	 * Sets and clears permission bits with a single chmod. Keeps the
 	 * setuid/setgid/sticky bits (the old code masked them off). Returns false
 	 * if the file doesn't exist or the server refuses.
+	 * <p>
+	 * Starts from the server's current mode, never the cached one: working
+	 * from a cached mode would silently undo any change made elsewhere since
+	 * it was cached (a lost update).
 	 */
 	private boolean changeMode(int set, int clear) throws IOException {
+		clearAttr();
 		SftpAttributes a = getAttr();
 		if( a == null ) {
 			return false;

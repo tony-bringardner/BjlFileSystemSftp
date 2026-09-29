@@ -33,11 +33,30 @@ class JschSftpFile implements SftpFile {
 	private InputStream in;
 	private long inPosition = -1;
 
-	JschSftpFile(JschSftpChannel channel, String path, boolean writable) {
+	/**
+	 * Checks access now, as a real open would: JSch has no plain "open" call,
+	 * so without this a file that can't be read or written would only fail
+	 * on the first read or write. The read stream opened for the check is
+	 * kept for the first read; the write check opens without truncating and
+	 * closes without writing, which leaves the file unchanged.
+	 *
+	 * @throws java.nio.file.AccessDeniedException if the file can't be opened as asked
+	 */
+	JschSftpFile(JschSftpChannel channel, String path, boolean writable) throws IOException {
 		this.channel = channel;
 		this.sftp = channel.sftp;
 		this.path = path;
 		this.writable = writable;
+		in = JschSftpChannel.call(path, () -> sftp.get(path, null, 0L));
+		inPosition = 0;
+		if( writable ) {
+			try {
+				JschSftpChannel.call(path, () -> sftp.put(path, null, ChannelSftp.RESUME, 0L)).close();
+			} catch (IOException e) {
+				closeReader();
+				throw e;
+			}
+		}
 	}
 
 	@Override
