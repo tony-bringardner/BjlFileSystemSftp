@@ -79,6 +79,15 @@ public class SftpFileSourceFactory extends FileSourceFactory {
 	public static final String PROP_SERVER_ALIVE_INTERVAL = "serverAliveInterval";
 	/** SSH library: "jsch" or "mina"; empty means the system property bjl.sftp.implementation, else jsch. */
 	public static final String PROP_IMPLEMENTATION = "implementation";
+	/**
+	 * Milliseconds a file's attributes (exists, size, times, type, owner) are
+	 * trusted before the server is asked again: 0 = always ask, negative =
+	 * until refresh(). Directory listings are never cached.
+	 */
+	public static final String PROP_ATTRIBUTE_CACHE_TTL = "attributeCacheTtl";
+	/** System property with the JVM-wide default for PROP_ATTRIBUTE_CACHE_TTL. */
+	public static final String SYSTEM_PROPERTY_ATTRIBUTE_CACHE_TTL = "bjl.sftp.attributeCacheTtl";
+	public static final long DEFAULT_ATTRIBUTE_CACHE_TTL = 2000;
 	public static final int DEFAULT_PORT = 22;
 	public static final int DEFAULT_CONNECT_TIMEOUT = 30_000;
 	public static final int DEFAULT_SERVER_ALIVE_INTERVAL = 30_000;
@@ -152,6 +161,8 @@ public class SftpFileSourceFactory extends FileSourceFactory {
 	private int serverAliveInterval = DEFAULT_SERVER_ALIVE_INTERVAL;
 	/** "jsch", "mina", or null for the default (see SshProviders). */
 	private String implementation;
+	/** See PROP_ATTRIBUTE_CACHE_TTL; volatile because files read it from any thread. */
+	private volatile long attributeCacheTtl = defaultAttributeCacheTtl();
 
 	/** The shared connection this factory holds a reference to, or null. */
 	private SharedSession shared;
@@ -280,6 +291,41 @@ public class SftpFileSourceFactory extends FileSourceFactory {
 	/** Milliseconds between keepalive messages on an idle connection (0 = none). */
 	public void setServerAliveInterval(int serverAliveInterval) {
 		this.serverAliveInterval = serverAliveInterval;
+	}
+
+	/**
+	 * The JVM-wide default for the attribute cache time: the system property
+	 * bjl.sftp.attributeCacheTtl if it's a number, otherwise 2000 ms.
+	 */
+	public static long defaultAttributeCacheTtl() {
+		String v = System.getProperty(SYSTEM_PROPERTY_ATTRIBUTE_CACHE_TTL);
+		if( v != null && !v.trim().isEmpty()) {
+			try {
+				return Long.parseLong(v.trim());
+			} catch (NumberFormatException e) {
+				// ignore a bad value and use the default
+			}
+		}
+		return DEFAULT_ATTRIBUTE_CACHE_TTL;
+	}
+
+	/**
+	 * Milliseconds a file's cached attributes (exists, size, times, type,
+	 * owner) are trusted before the server is asked again.
+	 */
+	public long getAttributeCacheTtl() {
+		return attributeCacheTtl;
+	}
+
+	/**
+	 * Sets how long a file's attributes are trusted, in milliseconds. 0 asks
+	 * the server every time (exactly like java.io.File); a negative value
+	 * keeps them until refresh() or a change made through the same object.
+	 * Takes effect immediately, for files already created too. Directory
+	 * listings are never cached, whatever this is set to.
+	 */
+	public void setAttributeCacheTtl(long millis) {
+		this.attributeCacheTtl = millis;
 	}
 
 	/** The configured SSH library ("jsch" or "mina"), or null for the default. */
@@ -509,6 +555,7 @@ public class SftpFileSourceFactory extends FileSourceFactory {
 		ret.connectTimeout = connectTimeout;
 		ret.serverAliveInterval = serverAliveInterval;
 		ret.implementation = implementation;
+		ret.attributeCacheTtl = attributeCacheTtl;
 		ret.chunkSize = chunkSize;
 
 		return ret;
@@ -529,6 +576,7 @@ public class SftpFileSourceFactory extends FileSourceFactory {
 		ret.setProperty(PROP_CONNECT_TIMEOUT, ""+connectTimeout);
 		ret.setProperty(PROP_SERVER_ALIVE_INTERVAL, ""+serverAliveInterval);
 		ret.setProperty(PROP_IMPLEMENTATION, implementation == null ? "":implementation);
+		ret.setProperty(PROP_ATTRIBUTE_CACHE_TTL, ""+attributeCacheTtl);
 
 		return ret;
 	}
@@ -594,6 +642,10 @@ public class SftpFileSourceFactory extends FileSourceFactory {
 		connectTimeout = Integer.parseInt(p.getProperty(PROP_CONNECT_TIMEOUT, ""+connectTimeout).trim());
 		serverAliveInterval = Integer.parseInt(p.getProperty(PROP_SERVER_ALIVE_INTERVAL, ""+serverAliveInterval).trim());
 		setImplementation(p.getProperty(PROP_IMPLEMENTATION, implementation));
+		String ttl = p.getProperty(PROP_ATTRIBUTE_CACHE_TTL);
+		if( ttl != null && !ttl.trim().isEmpty()) {
+			setAttributeCacheTtl(Long.parseLong(ttl.trim()));
+		}
 	}
 
 	@Override

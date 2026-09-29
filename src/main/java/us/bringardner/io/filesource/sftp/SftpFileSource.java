@@ -103,7 +103,6 @@ public class SftpFileSource extends BaseObject implements FileSource {
 			} finally {
 				mySftp.close();
 				clearAttr();
-				clearParentKids();
 			}
 		}
 
@@ -210,9 +209,15 @@ public class SftpFileSource extends BaseObject implements FileSource {
 	}
 
 	private String name;
+	/*
+	 * Cached answers from the server. They are trusted for the factory's
+	 * attribute cache time (getAttributeCacheTtl); after that the next call
+	 * asks the server again. Directory listings are not cached at all.
+	 */
 	private SftpAttributes attr;
 	private Boolean exists;
-	private SftpFileSource[] kids;
+	/** System.nanoTime() when the cached answers above and below were filled. */
+	private long cachedAt;
 	private String path;
 	private SftpFileSourceFactory factory;
 	private Boolean isLink;
@@ -253,7 +258,6 @@ public class SftpFileSource extends BaseObject implements FileSource {
 		this.name = name;
 		String parentPath = parent.getCanonicalPath();
 		this.path = parentPath.endsWith("/") ? parentPath+name : parentPath+"/"+name;
-		this.parent.addChild(this);
 	}
 
 	/**
@@ -286,46 +290,55 @@ public class SftpFileSource extends BaseObject implements FileSource {
 			//  We have a list entry so this file MUST exists.
 			this.exists = (true);
 		}
+		this.cachedAt = System.nanoTime();
 	}
 
-	private synchronized SftpFileSource[] getKids(ProgressMonitor monitor) throws IOException {
+	/**
+	 * Lists the directory. Every call asks the server, like java.io.File, so
+	 * a listing is never stale; the listing carries every child's attributes,
+	 * so isDirectory()/length() on the results cost nothing more. (Listings
+	 * used to be cached per object, so a change made through another object,
+	 * or by another program, was never seen.)
+	 *
+	 * @return the children, or null if this is a file or doesn't exist
+	 */
+	private SftpFileSource[] getKids(ProgressMonitor monitor) throws IOException {
 		if( monitor != null) monitor.setProgress(0);
-		if( kids == null ) {
+		SftpFileSource[] ret = null;
+		if( !isFile() ) {
+			// if it's not a file it may be a directory or a new / non existing entry
 			List<FileSource> list = new ArrayList<FileSource>();
-			if( !isFile() ) {
-				// if it's not a file it may be a directory or a new / non existing entry
-				try {
-					List<SftpEntry> ls = factory.ls(path);
-					int cnt = 0;
-					for (SftpEntry e : ls) {
-						cnt++;
-						
-						//System.out.println("name ="+e.getFilename());
-						if( ! (e.getFilename().equals(".") || e.getFilename().equals(".."))) {
-							list.add(new SftpFileSource(factory, this,e));
-						}
-						if( monitor != null) monitor.setProgress((int)((long)cnt*monitor.getMaximum()/ls.size()));
+			try {
+				List<SftpEntry> ls = factory.ls(path);
+				int cnt = 0;
+				for (SftpEntry e : ls) {
+					cnt++;
+					if( ! (e.getFilename().equals(".") || e.getFilename().equals(".."))) {
+						list.add(new SftpFileSource(factory, this,e));
 					}
-				} catch (IOException e) {
-					if( isNoSuchFile(e)) {
-						exists = (false);
-					} else {
-						throw e;
-					}
+					if( monitor != null) monitor.setProgress((int)((long)cnt*monitor.getMaximum()/ls.size()));
 				}
-				kids = list.toArray(new SftpFileSource[list.size()]);
+			} catch (IOException e) {
+				if( isNoSuchFile(e)) {
+					synchronized (this) {
+						attr = null;
+						exists = null;
+						isLink = null;
+						owner = null;
+						group = null;
+						linkedTo = null;
+						startClockIfEmpty();
+						exists = false;
+					}
+				} else {
+					throw e;
+				}
 			}
+			ret = list.toArray(new SftpFileSource[list.size()]);
 		}
-		
-		if( monitor != null) monitor.setProgress(monitor.getMaximum());
-		return kids;
-	}
 
-	/** A file was created or removed in the parent directory, so its cached listing is stale. */
-	private void clearParentKids() {
-		if( parent != null ) {
-			parent.dereferenceChilderen();
-		}
+		if( monitor != null) monitor.setProgress(monitor.getMaximum());
+		return ret;
 	}
 
 	private synchronized void clearOwner() {
@@ -338,6 +351,37 @@ public class SftpFileSource extends BaseObject implements FileSource {
 	synchronized void clearAttr()  {
 		attr = null;
 		exists = null;
+	}
+
+	/**
+	 * Drops the cached answers once they are older than the factory's
+	 * attribute cache time: 0 means never trust them, a negative time means
+	 * keep them until refresh().
+	 */
+	/**
+	 * Call before caching a new answer. Starts the clock if nothing is cached
+	 * yet, so cachedAt is always the time of the oldest cached answer and
+	 * refilling one value never extends the life of the others.
+	 */
+	private void startClockIfEmpty() {
+		if( attr == null && exists == null && isLink == null && owner == null && group == null ) {
+			cachedAt = System.nanoTime();
+		}
+	}
+
+	private synchronized void expireIfStale() {
+		long ttl = factory.getAttributeCacheTtl();
+		if( ttl < 0 ) {
+			return;
+		}
+		if( ttl == 0 || System.nanoTime() - cachedAt > ttl * 1_000_000L ) {
+			attr = null;
+			exists = null;
+			isLink = null;
+			linkedTo = null;
+			owner = null;
+			group = null;
+		}
 	}
 
 	/**
@@ -356,17 +400,23 @@ public class SftpFileSource extends BaseObject implements FileSource {
 	 * doesn't exist. Returns null if the file doesn't exist.
 	 */
 	private synchronized SftpAttributes getAttr() throws IOException {
+		expireIfStale();
 		if( attr == null ) {
+			SftpAttributes a = null;
+			Boolean e1;
 			try {
-				attr = factory.stat(path);
-				exists = (true);
+				a = factory.stat(path);
+				e1 = true;
 			} catch (IOException e) {
 				if( isNoSuchFile(e)) {
-					exists = (false);
+					e1 = false;
 				} else {
 					throw e;
 				}
 			}
+			startClockIfEmpty();
+			attr = a;
+			exists = e1;
 		}
 		return attr;
 	}
@@ -545,19 +595,6 @@ public class SftpFileSource extends BaseObject implements FileSource {
 	}
 
 
-	private void addChild(SftpFileSource child) throws IOException {
-		kids = null;
-		/*
-		getKids();
-		SftpFileSource tmp[] = new SftpFileSource[kids.length+1];
-		for (int idx = 0; idx < kids.length; idx++) {
-			tmp[idx] = kids[idx];
-		}
-		tmp[kids.length] = child;
-		kids = tmp;
-		 */
-	}
-
 	@Override
 	public synchronized boolean delete() throws IOException {
 		boolean ret = false;
@@ -570,21 +607,14 @@ public class SftpFileSource extends BaseObject implements FileSource {
 		} else {
 			factory.sftp(c -> { c.remove(path); return null; });
 		}
-		attr = null;
-		exists = null;
-		FileSource p = getParentFile();
-		if( p != null ) {
-
-			if (p instanceof SftpFileSource) {
-				((SftpFileSource) p).kids = null;					
-			}
-		}
+		clearAttr();
 		ret = true;
 		return ret;
 	}
 
 	@Override
 	public synchronized  boolean exists() throws IOException {
+		expireIfStale();
 		if( exists == null ) {
 			getAttr();
 		}
@@ -756,10 +786,8 @@ public class SftpFileSource extends BaseObject implements FileSource {
 				if( !(myName.equals("/") || yourName.equals("/") || myName.equals(yourName))) {
 					factory.sftp(c -> { c.rename(myName, yourName); return null; });
 					ret = true;
-					fs.attr =attr = null;
-					fs.exists = exists = null;
-					fs.kids = kids = null;
-					((SftpFileSource)getParentFile()).kids = null;
+					fs.clearAttr();
+					clearAttr();
 				}	
 			}
 		}
@@ -931,17 +959,14 @@ public class SftpFileSource extends BaseObject implements FileSource {
 	}
 
 	@Override
-	public  synchronized void dereferenceChilderen() {
-		// release memory
-		kids = null;
-
+	public void dereferenceChilderen() {
+		// nothing to release: directory listings aren't cached
 	}
 
 	@Override
 	public  synchronized void refresh() throws IOException {
 		attr = null;
 		exists = null;
-		kids = null;
 		isLink = null;
 		linkedTo = null;
 		owner = null;
@@ -962,8 +987,10 @@ public class SftpFileSource extends BaseObject implements FileSource {
 
 	@Override
 	public synchronized FileSource getLinkedTo() throws IOException {
+		expireIfStale();
 		if( isLink == null || (isLink && linkedTo == null)) {
 			SftpAttributes self = getLinkAttr();
+			startClockIfEmpty();
 			isLink = self != null && self.isLink();
 			if( isLink ) {
 				String target = factory.readlink(path);
@@ -1021,6 +1048,7 @@ public class SftpFileSource extends BaseObject implements FileSource {
 	 */
 	@Override
 	public synchronized FileSourceUser getOwner() throws IOException {
+		expireIfStale();
 		if( owner == null ) {
 			SftpAttributes a = getAttr();
 			if( a == null ) {

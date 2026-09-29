@@ -42,3 +42,20 @@ Code that needs to talk to the server directly can use the library-neutral inter
 | `knownHosts` | `~/.ssh/known_hosts` | known_hosts file used when checking is on |
 | `connectTimeout` | 30000 | Milliseconds for connect, handshake and login |
 | `serverAliveInterval` | 30000 | Milliseconds between keepalives; 0 turns them off |
+| `attributeCacheTtl` | 2000 | Milliseconds a file's details are cached; see below |
+
+## Caching
+
+Directory listings are never cached: every `listFiles()` asks the server, like `java.io.File`, so a listing always shows changes made through other objects or by other programs. The listing carries each child's details, so calling `isDirectory()` or `length()` on its results costs nothing more.
+
+A file's own details (whether it exists, its size, times, type and owner) are cached for `attributeCacheTtl` milliseconds, then fetched again:
+
+| Value | Behaviour |
+|---|---|
+| `2000` (default) | Trusted for 2 seconds |
+| `0` | Always asks the server, exactly like `java.io.File` |
+| negative, e.g. `-1` | Kept until `refresh()` |
+
+Changes made through the same `FileSource` object (writing, deleting, renaming, changing permissions) are always seen at once, whatever the setting.
+
+Set it per factory with `setAttributeCacheTtl(millis)` or the `attributeCacheTtl` connection property, or for the whole JVM with `-Dbjl.sftp.attributeCacheTtl=0`. A factory's own setting wins; changing it applies at once, to files already created too.
