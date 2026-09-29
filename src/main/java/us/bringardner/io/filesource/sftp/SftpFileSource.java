@@ -45,6 +45,8 @@ import us.bringardner.io.filesource.FileSource;
 import us.bringardner.io.filesource.FileSourceFactory;
 import us.bringardner.io.filesource.FileSourceFilter;
 import us.bringardner.io.filesource.FileSourceGroup;
+import us.bringardner.io.filesource.FileSourceRandomAccessStream;
+import us.bringardner.io.filesource.IRandomAccessStream;
 import us.bringardner.io.filesource.FileSourceUser;
 import us.bringardner.io.filesource.ISeekableInputStream;
 import us.bringardner.io.filesource.fileproxy.FileProxy;
@@ -783,20 +785,43 @@ public class SftpFileSource extends BaseObject implements FileSource {
 
 	@Override
 	public InputStream getInputStream() throws FileNotFoundException,IOException {
-		return new SftpInputStream();
+		try {
+			return new SftpInputStream();
+		} catch (IOException e) {
+			throw openError(path, e);
+		}
 	}
 
 	@Override
 	public OutputStream getOutputStream() throws IOException {
-		return new SftpOutputStream(false);
-
+		return getOutputStream(false);
 	}
 
 	@Override
 	public OutputStream getOutputStream(boolean append)	throws IOException {
+		try {
+			return new SftpOutputStream(append);
+		} catch (IOException e) {
+			throw openError(path, e);
+		}
+	}
 
-		return new SftpOutputStream(append);
-
+	/**
+	 * Opening a file that is missing or not permitted throws
+	 * FileNotFoundException, as java.io's streams and RandomAccessFile do
+	 * (and as the FileSource methods declare). Other errors pass through.
+	 */
+	static IOException openError(String path, IOException e) {
+		if( e instanceof FileNotFoundException ) {
+			return e;
+		}
+		if( e instanceof NoSuchFileException ) {
+			return (IOException) new FileNotFoundException(path+" (No such file or directory)").initCause(e);
+		}
+		if( e instanceof AccessDeniedException ) {
+			return (IOException) new FileNotFoundException(path+" (Permission denied)").initCause(e);
+		}
+		return e;
 	}
 
 	@Override
@@ -871,7 +896,11 @@ public class SftpFileSource extends BaseObject implements FileSource {
 
 	@Override
 	public InputStream getInputStream(long skipTo) throws IOException {
-		return new SftpInputStream(skipTo);
+		try {
+			return new SftpInputStream(skipTo);
+		} catch (IOException e) {
+			throw openError(path, e);
+		}
 	}
 
 	@Override
@@ -955,8 +984,32 @@ public class SftpFileSource extends BaseObject implements FileSource {
 	}
 
 	@Override
+	/** A read-only stream that can seek; see SftpSeekableInputStream. */
 	public ISeekableInputStream getSeekableInputStream() throws IOException {
-		throw new IOException("ISeekableInputStream not implemented");
+		return new SftpSeekableInputStream(this);
+	}
+
+	/**
+	 * Random access in RandomAccessFile's modes: "r" opens read-only; "rw"
+	 * (and "rws", "rwd") opens for reading and writing, creating the file if
+	 * it doesn't exist.
+	 *
+	 * @throws FileNotFoundException if the file is a directory, is missing in
+	 *         "r" mode, or can't be opened with the requested access
+	 */
+	@Override
+	public IRandomAccessStream getRandomAccessStream(String mode) throws IOException {
+		SftpRandomAccessIoController io = new SftpRandomAccessIoController(this, mode);
+		try {
+			return new FileSourceRandomAccessStream(io, mode);
+		} catch (IOException | RuntimeException e) {
+			try {
+				io.close();
+			} catch (Exception e2) {
+				e.addSuppressed(e2);
+			}
+			throw e;
+		}
 	}
 
 	/**

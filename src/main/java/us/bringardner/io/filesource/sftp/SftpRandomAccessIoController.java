@@ -27,6 +27,7 @@
 
 package us.bringardner.io.filesource.sftp;
 
+import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.nio.file.AccessDeniedException;
 import java.nio.file.NoSuchFileException;
@@ -34,6 +35,7 @@ import java.util.Arrays;
 
 import us.bringardner.io.filesource.AbstractRandomAccessIoController;
 import us.bringardner.io.filesource.FileSource;
+import us.bringardner.io.filesource.sftp.client.SftpAttributes;
 import us.bringardner.io.filesource.sftp.client.SftpChannel;
 import us.bringardner.io.filesource.sftp.client.SftpFile;
 
@@ -46,12 +48,65 @@ public class SftpRandomAccessIoController extends AbstractRandomAccessIoControll
 	private final SftpFileSourceFactory myFactory;
 	private final SftpChannel channel;
 	private SftpFile handle;
+	/** Opened with mode "r": the handle is read-only. */
+	private final boolean readOnly;
 
 
+	/**
+	 * Opens the file for reading and writing, lazily: it's created on first
+	 * use if missing, and opened read-only if it can't be written (writes
+	 * then fail). Kept for existing callers; FileSource.getRandomAccessStream
+	 * uses the mode constructor instead.
+	 */
 	public SftpRandomAccessIoController(FileSource file) throws IOException {
 		super(file);
 		myFactory = (SftpFileSourceFactory) file.getFileSourceFactory();
 		channel = myFactory.getConnection().openSftp();
+		readOnly = false;
+	}
+
+	/**
+	 * Opens the file now, in one of RandomAccessFile's modes. "r" opens it
+	 * read-only; "rw", "rws" and "rwd" open it for reading and writing and
+	 * create it if it doesn't exist. (Every write is sent to the server when
+	 * the chunk is saved, so "rws"/"rwd" need nothing extra.)
+	 *
+	 * @throws IllegalArgumentException for any other mode
+	 * @throws FileNotFoundException if it's a directory, missing in "r"
+	 *         mode, or can't be opened with the requested access
+	 */
+	public SftpRandomAccessIoController(FileSource file, String mode) throws IOException {
+		super(file);
+		if( !("r".equals(mode) || "rw".equals(mode) || "rws".equals(mode) || "rwd".equals(mode))) {
+			throw new IllegalArgumentException("Illegal mode \""+mode+"\" must be one of \"r\", \"rw\", \"rws\", or \"rwd\"");
+		}
+		myFactory = (SftpFileSourceFactory) file.getFileSourceFactory();
+		readOnly = mode.equals("r");
+		channel = myFactory.getConnection().openSftp();
+		String path = file.getAbsolutePath();
+		try {
+			SftpAttributes a;
+			try {
+				a = channel.stat(path);   // follows links
+			} catch (NoSuchFileException e) {
+				if( readOnly ) {
+					throw e;
+				}
+				channel.write(path, false).close();   // create it, like RandomAccessFile "rw"
+				fileChanged();
+				a = channel.stat(path);
+			}
+			if( a.isDir()) {
+				throw new FileNotFoundException(path+" (Is a directory)");
+			}
+			handle = channel.open(path, !readOnly);
+		} catch (IOException e) {
+			channel.close();
+			throw SftpFileSource.openError(path, e);
+		} catch (RuntimeException e) {
+			channel.close();
+			throw e;
+		}
 	}
 
 	@Override
@@ -96,6 +151,9 @@ public class SftpRandomAccessIoController extends AbstractRandomAccessIoControll
 
 	@Override
 	protected void writeChunk(Chunk chunk) throws IOException {
+		if( readOnly ) {
+			throw new IOException("Opened read-only (mode \"r\")");
+		}
 		getHandle().write(chunk.start, chunk.data, 0, chunk.data.length);
 		fileChanged();
 
@@ -103,6 +161,9 @@ public class SftpRandomAccessIoController extends AbstractRandomAccessIoControll
 
 	@Override
 	public void setLength0(long newLength) throws IOException {
+		if( readOnly ) {
+			throw new IOException("Opened read-only (mode \"r\")");
+		}
 		long len = length();
 		if( len != newLength) {
 			if( newLength< length()) {
@@ -125,6 +186,7 @@ public class SftpRandomAccessIoController extends AbstractRandomAccessIoControll
 
 	private SftpFile getHandle() throws IOException {
 		if( handle == null ) {
+			// only the one-argument constructor gets here; the mode constructor opens eagerly
 			try {
 				handle = channel.open(file.getAbsolutePath(), true);
 			} catch (NoSuchFileException e) {
