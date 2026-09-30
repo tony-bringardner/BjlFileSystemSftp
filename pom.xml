@@ -3,7 +3,7 @@
 	xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
 	<modelVersion>4.0.0</modelVersion>
 	<artifactId>bjl_file_system_sftp</artifactId>
-	<version>0.1.3</version>
+	<version>1.0.0-SNAPSHOT</version>
 	<groupId>us.bringardner</groupId>
 	<name>SFTP FileSource</name>
 	<description>Contains the SSH/SFTP implementation of the FileSource
@@ -95,7 +95,7 @@
 		<dependency>
 			<groupId>us.bringardner</groupId>
 			<artifactId>bjl_file_system</artifactId>
-			<version>0.1.3</version>
+			<version>1.0.2-SNAPSHOT</version>
 		</dependency>
 		
 		<!-- SSH libraries. Both are included; which one is used is chosen at run

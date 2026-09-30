@@ -561,6 +561,16 @@ public class SftpFileSourceFactory extends FileSourceFactory {
 		return ret;
 	}
 
+	/**
+	 * The password and the private key (the key text itself) are credentials, and the
+	 * session key by default carries a hash of them (see getSessionKey()). identityFile
+	 * and knownHosts are file paths, not secrets.
+	 */
+	@Override
+	public boolean isSecretProperty(String name) {
+		return PROP_PASSWORD.equals(name) || PROP_PRIVATE_KEY.equals(name) || PROP_SESSION_KEY.equals(name);
+	}
+
 	@Override
 	public Properties getConnectProperties() {
 		Properties ret = new Properties();
