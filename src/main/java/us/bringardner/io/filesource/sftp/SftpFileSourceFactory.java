@@ -562,6 +562,25 @@ public class SftpFileSourceFactory extends FileSourceFactory {
 	}
 
 	/**
+	 * The same server account: same host (ignoring case), port and user. Paths from
+	 * such factories name the same files, so isChildOfMine can compare them.
+	 */
+	@Override
+	public boolean isSameFileSystem(FileSourceFactory other) {
+		if( other == this ) {
+			return true;
+		}
+		if( !(other instanceof SftpFileSourceFactory)) {
+			return false;
+		}
+		SftpFileSourceFactory o = (SftpFileSourceFactory) other;
+		String h1 = getHost(), h2 = o.getHost();
+		return getPort() == o.getPort()
+				&& (h1 == null ? h2 == null : h1.equalsIgnoreCase(h2))
+				&& java.util.Objects.equals(getUser(), o.getUser());
+	}
+
+	/**
 	 * The password and the private key (the key text itself) are credentials, and the
 	 * session key by default carries a hash of them (see getSessionKey()). identityFile
 	 * and knownHosts are file paths, not secrets.

@@ -53,6 +53,9 @@ import us.bringardner.io.filesource.fileproxy.FileProxy;
 import us.bringardner.io.filesource.sftp.client.SftpAttributes;
 import us.bringardner.io.filesource.sftp.client.SftpChannel;
 import us.bringardner.io.filesource.sftp.client.SftpEntry;
+import java.util.ArrayDeque;
+import java.util.Arrays;
+import java.util.Deque;
 
 public class SftpFileSource extends BaseObject implements FileSource {
 
@@ -256,7 +259,8 @@ public class SftpFileSource extends BaseObject implements FileSource {
 		this.parent = parent;
 		this.factory = factory;
 		this.name = name;
-		String parentPath = parent.getCanonicalPath();
+		// the parent's own path: resolving links here would cost a server round trip per child
+		String parentPath = parent.path;
 		this.path = parentPath.endsWith("/") ? parentPath+name : parentPath+"/"+name;
 	}
 
@@ -634,9 +638,81 @@ public class SftpFileSource extends BaseObject implements FileSource {
 		return path;
 	}
 
+	/**
+	 * The path with "." and ".." resolved and symbolic links followed (BJL-12).
+	 * <p>
+	 * Each element is checked on the server (lstat, and readlink for a link), because
+	 * the SFTP protocol doesn't require REALPATH to follow links. Below the first element
+	 * that doesn't exist the rest is resolved by name, until a ".." climbs back into
+	 * existing directories. Fails (IOException) rather than guess if an element can't be
+	 * checked, e.g. permission denied; isChildOfMine then answers false.
+	 */
 	@Override
 	public String getCanonicalPath() throws IOException {
-		return path;
+		String abs = path;
+		if( !abs.startsWith("/")) {
+			abs = factory.getCurrentDirectory().getAbsolutePath()+"/"+abs;
+		}
+		return canonicalize(factory, abs);
+	}
+
+	/** As in POSIX (SYMLOOP_MAX / Linux ELOOP). */
+	static final int MAX_LINKS = 40;
+
+	static String canonicalize(SftpFileSourceFactory factory, String absolutePath) throws IOException {
+		Deque<String> todo = new ArrayDeque<>(Arrays.asList(absolutePath.split("/")));
+		List<String> done = new ArrayList<>();
+		// index in 'done' of the first element that doesn't exist, or -1
+		int missingAt = -1;
+		int links = 0;
+		while( !todo.isEmpty()) {
+			String part = todo.pollFirst();
+			if( part.isEmpty() || part.equals(".")) {
+				continue;
+			}
+			if( part.equals("..")) {
+				if( !done.isEmpty()) {
+					done.remove(done.size()-1);
+				}
+				if( missingAt >= done.size()) {
+					// back in directories that exist: check links again
+					missingAt = -1;
+				}
+				continue;
+			}
+			done.add(part);
+			if( missingAt >= 0 ) {
+				continue;
+			}
+			String current = "/"+String.join("/", done);
+			SftpAttributes a;
+			try {
+				a = factory.lstat(current);
+			} catch (IOException e) {
+				if( isNoSuchFile(e)) {
+					missingAt = done.size()-1;
+					continue;
+				}
+				throw e;
+			}
+			if( a != null && a.isLink()) {
+				if( ++links > MAX_LINKS ) {
+					throw new IOException("Too many levels of symbolic links: "+absolutePath);
+				}
+				String target = factory.readlink(current);
+				// a relative target is relative to the link's directory
+				done.remove(done.size()-1);
+				if( target.startsWith("/")) {
+					done.clear();
+				}
+				List<String> t = Arrays.asList(target.split("/"));
+				for(int idx = t.size()-1; idx >= 0; idx--) {
+					todo.addFirst(t.get(idx));
+				}
+			}
+		}
+
+		return "/"+String.join("/", done);
 	}
 
 	@Override
@@ -666,11 +742,6 @@ public class SftpFileSource extends BaseObject implements FileSource {
 		}
 
 		return parent;
-	}
-
-	@Override
-	public boolean isChildOfMine(FileSource child) throws IOException {
-		return child.getAbsolutePath().startsWith(getAbsolutePath());
 	}
 
 	@Override
@@ -774,8 +845,9 @@ public class SftpFileSource extends BaseObject implements FileSource {
 
 	@Override
 	public synchronized  boolean renameTo(FileSource dest) throws IOException {
-		String myName = getCanonicalPath();
-		String yourName = dest.getCanonicalPath();
+		// the paths themselves: renaming a link renames the link, not its target
+		String myName = path;
+		String yourName = dest.getAbsolutePath();
 
 		boolean ret = false;
 		if(exists() && 
@@ -861,11 +933,7 @@ public class SftpFileSource extends BaseObject implements FileSource {
 
 		String path = null;
 
-		try {
-			path = getCanonicalPath();
-		} catch (IOException e) {
-			throw new MalformedURLException("Can't get path");
-		}
+		path = getAbsolutePath();
 		if( path == null ) {
 			path = "/";
 		} else {
@@ -939,10 +1007,8 @@ public class SftpFileSource extends BaseObject implements FileSource {
 		boolean ret = false;
 		if (obj instanceof SftpFileSource) {
 			SftpFileSource f = (SftpFileSource) obj;
-			try {
-				ret = f.getCanonicalPath().equals(getCanonicalPath());
-			} catch (IOException e) {
-			}
+			// the same path on the same server account, consistent with compareTo()
+			ret = f.path.equals(path) && f.factory.isSameFileSystem(factory);
 		}
 		return ret ;
 	}
