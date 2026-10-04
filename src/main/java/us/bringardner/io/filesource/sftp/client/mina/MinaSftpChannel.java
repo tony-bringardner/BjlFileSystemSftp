@@ -23,6 +23,7 @@ import us.bringardner.io.filesource.sftp.client.SftpAttributes;
 import us.bringardner.io.filesource.sftp.client.SftpChannel;
 import us.bringardner.io.filesource.sftp.client.SftpEntry;
 import us.bringardner.io.filesource.sftp.client.SftpFile;
+import us.bringardner.io.IoUtils;
 
 /** SFTP through Apache MINA SSHD's SftpClient. */
 class MinaSftpChannel implements SftpChannel {
@@ -217,11 +218,7 @@ class MinaSftpChannel implements SftpChannel {
 
 	@Override
 	public void close() {
-		try {
-			sftp.close();
-		} catch (IOException e) {
-			// closing; nothing useful to do
-		}
+		IoUtils.closeQuietly(sftp);
 	}
 
 	/** Reads a file from a position through an open handle, BUFFER_SIZE bytes per request. */

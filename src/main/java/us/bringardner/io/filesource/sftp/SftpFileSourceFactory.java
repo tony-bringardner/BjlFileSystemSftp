@@ -48,6 +48,7 @@ import us.bringardner.io.filesource.sftp.client.SshConnection;
 import us.bringardner.io.filesource.sftp.client.SshProvider;
 import us.bringardner.io.filesource.sftp.client.SshProviders;
 import us.bringardner.io.filesource.sftp.client.SshSettings;
+import us.bringardner.core.util.Hex;
 
 /**
  * FileSource factory for SFTP. The SSH library is chosen at run time: set
@@ -445,12 +446,7 @@ public class SftpFileSourceFactory extends FileSourceFactory {
 			if( privateKey != null ) {
 				md.update(privateKey);
 			}
-			StringBuilder hex = new StringBuilder();
-			byte[] d = md.digest();
-			for (int i = 0; i < 8; i++) {
-				hex.append(String.format("%02x", d[i]));
-			}
-			return hex.toString();
+			return Hex.encode(md.digest(), 0, 8, false, null);
 		} catch (NoSuchAlgorithmException e) {
 			throw new IllegalStateException(e);   // SHA-256 is always available
 		}
