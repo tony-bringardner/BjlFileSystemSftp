@@ -15,7 +15,8 @@ import us.bringardner.io.filesource.sftp.client.SftpFile;
  * "read/write at offset" call:
  * <ul>
  * <li>Reads use get(path, monitor, offset). The stream is kept open while
- * reads move forward and reopened after a seek (one round trip).</li>
+ * reads move forward and reopened after a seek (one round trip) or at the
+ * end of the file.</li>
  * <li>Writes use put(path, monitor, RESUME, offset). RESUME opens the file
  * without truncating it and starts at offset + the file's current size, so
  * passing (position - size) writes at 'position'. Each write is an open,
@@ -72,6 +73,8 @@ class JschSftpFile implements SftpFile {
 		int n = in.read(b, off, len);
 		if( n > 0 ) {
 			inPosition += n;
+		} else {
+			closeReader();   // the end of the file; ask the server again next time, in case it grew
 		}
 		return n;
 	}

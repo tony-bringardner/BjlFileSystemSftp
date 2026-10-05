@@ -20,8 +20,7 @@ BjlFileSystemFtp, BjlFileSystemJdbc. They live next to this repo in
 
 ## Building and testing
 
-- `mvn package` runs the whole suite. At batch 10 that was 99 tests; Tony has
-  added more since.
+- `mvn package` runs the whole suite. At batch 12 that was 128 tests.
 - Most tests need a real SSH server on **localhost:22** with these accounts:
   `unittest1` / `0000` (groups `testgroup1`, `testgroup2`), `unittest2`,
   `unittest3`, and `unittest4`, which is SFTP-only and can't run commands.
@@ -78,44 +77,30 @@ The full review is in the claude.ai project "FileSystem", in
 - **Not code:** the private key that used to be embedded in
   `SftpPropertyEditPanel` was public on GitHub. It must be removed from
   `authorized_keys` on every server that accepts it. Never print it.
-- **Still open:** batches 12 and 13 below. Also: moving the tests onto the
+- **Batch 12** is done on `fix/sftp-review-12` (below).
+- **Still open:** batch 13 below. Also: moving the tests onto the
   embedded server so CI can run them, and the Swing panel pre-filling
   `unittest1` and `localhost`.
 
 ## Batch 12: read-ahead for random access (`fix/sftp-review-12`)
 
-**Problem.** With MINA, `MinaSftpFile.read` sends one SFTP READ and waits for
-the answer. A sequential pass through a file therefore takes one round trip
-per chunk. At 50 ms latency and 32 KB chunks, that's about 640 KB/s. JSch is
-already fast here, because `JschSftpFile` keeps a `get(path, offset)` stream
-open while reads move forward, and that stream sends requests ahead.
+**Done on its branch; not merged yet.**
 
-**Suggested approach** (check it against the code first):
-
-- In `MinaSftpFile`, do what `JschSftpFile` does. While reads move forward,
-  read from one `channel.read(path, position)` stream, which MINA pipelines.
-  Reopen that stream after a seek.
-- Close the stream on every `write` and `truncate`, because the data it has
-  read ahead may be out of date.
-- Close it in `close()` too.
-- Keep the `SftpFile` contract: a read may return fewer bytes than asked for,
-  and returns -1 at the end of the file.
-- Simpler alternative: in `SftpRandomAccessIoController.readChunkForPos`, when
-  access is sequential, read several chunks at once. Prefer the stream
-  approach if it measures better.
-
-**Tests:**
-
-- Positional reads after a seek, forward and backward, return the right bytes
-  with both libraries.
-- A read after a write sees the new data.
-- A read after a truncate sees the new length.
-- Reading to the end returns -1.
-- Opening and closing 15 files in a row leaks no channels (OpenSSH allows 10
-  per connection).
-- The gain doesn't show on localhost. Measure by counting READ requests (for
-  example, with a counting wrapper around `SftpFile`), or with a simulated
-  delay.
+- `MinaSftpFile`: a read after a seek is one request. Once reads move
+  forward, they come from MINA's `SftpInputStreamAsync` on the same handle
+  (`closeHandle=false`), which keeps requests in flight. Read-ahead starts at
+  128 KB and doubles each time it's used up, to 2 MB. That limits the data
+  thrown away when a seek closes the reader. The size hint passed to the
+  stream (`inEnd - 1`) stops it asking for more.
+- The reader is closed on a seek, a write, a truncate, at EOF and on close.
+  The read after a write or truncate is a single request again, so reading
+  and writing in turn doesn't fetch data ahead and then throw it away.
+- `JschSftpFile`: closes its `get` stream at EOF. Before, a read at the old
+  end of a file that had since grown kept returning -1.
+- `SftpReadAheadTest` checks this with both libraries. Its speed tests go
+  through `DelayProxy`, a TCP proxy that adds 25 ms each way. A 2 MB pass
+  took 72 round trips with MINA before and takes about 11 now. JSch takes
+  about 10.
 
 ## Batch 13: a pool of open SFTP channels (`fix/sftp-review-13`)
 
