@@ -27,6 +27,9 @@ import us.bringardner.io.filesource.sftp.client.SshSettings;
 /** SSH through Apache MINA SSHD. */
 public class MinaProvider implements SshProvider {
 
+	/** Unanswered keepalives before the connection is dropped (OpenSSH's default). */
+	static final int SERVER_ALIVE_COUNT_MAX = 3;
+
 	@Override
 	public String getName() {
 		return SshProviders.MINA;
@@ -49,6 +52,10 @@ public class MinaProvider implements SshProvider {
 			}
 			if( s.serverAliveIntervalMs > 0 ) {
 				CoreModuleProperties.HEARTBEAT_INTERVAL.set(client, Duration.ofMillis(s.serverAliveIntervalMs));
+				// Ask for a reply and give up after this many go unanswered, like
+				// OpenSSH's ServerAliveCountMax. Without it MINA's heartbeats are
+				// one-way, so a dead connection could look alive for many minutes.
+				CoreModuleProperties.HEARTBEAT_NO_REPLY_MAX.set(client, SERVER_ALIVE_COUNT_MAX);
 			}
 			client.start();
 

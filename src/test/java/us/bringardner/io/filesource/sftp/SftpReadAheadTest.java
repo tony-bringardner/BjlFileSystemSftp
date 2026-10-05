@@ -65,6 +65,10 @@ public class SftpReadAheadTest {
 		proxy = new DelayProxy(TestServer.port(), DELAY_MS);
 		slowJsch = connect("jsch", proxy.port());
 		slowMina = connect("mina", proxy.port());
+		// these tests count chunks of CHUNK bytes, not the default size
+		for (SftpFileSourceFactory f : new SftpFileSourceFactory[] {jsch, mina, slowJsch, slowMina}) {
+			f.setChunkSize(CHUNK);
+		}
 		FileSource dir = jsch.createFileSource(DIR);
 		if( !dir.exists()) {
 			assertTrue(dir.mkdirs(), "Can't create "+dir);
@@ -381,6 +385,8 @@ public class SftpReadAheadTest {
 		private final ServerSocket server;
 		private final int targetPort;
 		private final long delayMs;
+		/** While true, data is held back both ways, like a connection whose peer has vanished. */
+		private volatile boolean frozen;
 
 		DelayProxy(int targetPort, long delayMs) throws IOException {
 			this.targetPort = targetPort;
@@ -391,6 +397,11 @@ public class SftpReadAheadTest {
 
 		int port() {
 			return server.getLocalPort();
+		}
+
+		/** From now on nothing gets through, in either direction; nothing is closed either. */
+		void freeze() {
+			frozen = true;
 		}
 
 		private void accept() {
@@ -441,6 +452,9 @@ public class SftpReadAheadTest {
 						long wait = p.due - System.nanoTime();
 						if( wait > 0 ) {
 							Thread.sleep(wait / 1_000_000, (int) (wait % 1_000_000));
+						}
+						while( frozen ) {
+							Thread.sleep(10);
 						}
 						if( p.data == END ) {
 							break;

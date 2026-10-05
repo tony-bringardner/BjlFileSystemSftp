@@ -140,9 +140,8 @@ public class SftpFileSource extends BaseObject implements FileSource {
 		}
 
 		public SftpInputStream(long skipTo) throws IOException {
-			attr = null;
-			exists = null;
-
+			// Reading changes nothing worth asking the server about again, so the
+			// cached attributes are kept (clearing them cost a stat after every read).
 			mySftp = factory.openSftp();
 			try {
 				in = mySftp.read(path, skipTo);
@@ -1144,6 +1143,10 @@ public class SftpFileSource extends BaseObject implements FileSource {
 				}
 				userName = factory.userName(a.getUId());
 				groupName = factory.groupName(a.getGId());
+				if( userName == null || groupName == null ) {
+					// so the next file with this owner doesn't list the directory again
+					factory.rememberUnknownNames(a.getUId(), a.getGId());
+				}
 			}
 			owner = new FileSourceUser(a.getUId(), userName == null ? ""+a.getUId() : userName,
 					a.getGId(), groupName == null ? ""+a.getGId() : groupName);

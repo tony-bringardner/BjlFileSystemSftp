@@ -4,6 +4,11 @@ import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 import com.jcraft.jsch.ChannelExec;
 import com.jcraft.jsch.ChannelSftp;
@@ -67,6 +72,14 @@ class JschConnection implements SshConnection {
 		}
 	}
 
+	/** Closes commands that run too long; one daemon thread for every connection. */
+	private static final ScheduledExecutorService TIMER = Executors.newSingleThreadScheduledExecutor(r -> {
+		Thread t = new Thread(r, "JSch command timer");
+		t.setDaemon(true);
+		return t;
+	});
+
+	/** @param commandTimeoutMs 0 or less: no limit */
 	@Override
 	public ExecResult exec(String command, long commandTimeoutMs) throws IOException {
 		ChannelExec exec = null;
@@ -80,19 +93,39 @@ class JschConnection implements SshConnection {
 			InputStream stdOut = exec.getInputStream();
 			exec.connect(timeoutMs);
 
+			// The time limit is enforced by closing the channel, which ends the
+			// read below. Reading until EOF used to come first, with no limit,
+			// so a command that hung with its output open blocked forever. (The
+			// read has to block: JSch's pipe only wakes its writer when a
+			// blocking read finds it empty, so polling it is very slow.)
+			AtomicBoolean timedOut = new AtomicBoolean();
+			ChannelExec channel = exec;
+			ScheduledFuture<?> timer = commandTimeoutMs <= 0 ? null : TIMER.schedule(() -> {
+				timedOut.set(true);
+				channel.disconnect();
+			}, commandTimeoutMs, TimeUnit.MILLISECONDS);
 			ByteArrayOutputStream out = new ByteArrayOutputStream();
-			byte[] buffer = new byte[4096];
-			int read;
-			while( (read = stdOut.read(buffer)) >= 0 ) {
-				out.write(buffer, 0, read);
-			}
-
-			long end = System.currentTimeMillis() + commandTimeoutMs;
-			while( !exec.isClosed()) {
-				if( System.currentTimeMillis() > end ) {
-					throw new IOException("Command did not finish within "+commandTimeoutMs/1000+" s: "+command);
+			try {
+				byte[] buffer = new byte[4096];
+				int read;
+				while( (read = stdOut.read(buffer)) >= 0 ) {
+					out.write(buffer, 0, read);
 				}
-				Thread.sleep(10);
+				while( !exec.isClosed() && !timedOut.get()) {
+					Thread.sleep(10);   // EOF comes just before the exit status and the close
+				}
+			} catch (IOException e) {
+				if( !timedOut.get()) {
+					throw e;
+				}
+				// the timer closed the pipe under the read
+			} finally {
+				if( timer != null ) {
+					timer.cancel(false);
+				}
+			}
+			if( timedOut.get()) {
+				throw new IOException("Command did not finish within "+commandTimeoutMs/1000.0+" s: "+command);
 			}
 			return new ExecResult(exec.getExitStatus(),
 					out.toString(StandardCharsets.UTF_8.name()),

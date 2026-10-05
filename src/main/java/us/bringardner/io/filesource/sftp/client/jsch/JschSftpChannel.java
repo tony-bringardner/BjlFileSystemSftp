@@ -231,7 +231,8 @@ class JschSftpChannel implements SftpChannel {
 
 	@Override
 	public SftpFile open(String path, boolean write) throws IOException {
-		stat(path);   // throws NoSuchFileException if it isn't there
+		// JschSftpFile opens the file for reading at once, which throws
+		// NoSuchFileException if it isn't there; a stat first cost a round trip
 		return new JschSftpFile(this, path, write);
 	}
 

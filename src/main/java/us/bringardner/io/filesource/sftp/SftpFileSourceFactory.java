@@ -29,6 +29,8 @@ import java.awt.Component;
 import java.io.IOException;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.AccessDeniedException;
+import java.nio.file.NoSuchFileException;
 import java.nio.file.attribute.PosixFilePermission;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
@@ -37,6 +39,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Properties;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.regex.Pattern;
 
 import us.bringardner.io.filesource.FileSource;
 import us.bringardner.io.filesource.FileSourceFactory;
@@ -136,6 +139,8 @@ public class SftpFileSourceFactory extends FileSourceFactory {
 		int refs = 1;
 		/** Idle SFTP channels for streams; closed with the connection. */
 		final SftpChannelPool pool;
+		/** The remote user (see whoAmI), worked out once per connection. */
+		volatile FileSourceUser remoteUser;
 
 		SharedSession(String key, SshConnection connection) {
 			this.key = key;
@@ -179,8 +184,9 @@ public class SftpFileSourceFactory extends FileSourceFactory {
 	/**
 	 * Bytes per random-access read or write. Each chunk is one round trip, so
 	 * bigger is faster over a network; OpenSSH serves up to 256 KB per read.
+	 * A server that sends less per read is asked again for the rest.
 	 */
-	public static final int DEFAULT_CHUNK_SIZE = 32*1024;
+	public static final int DEFAULT_CHUNK_SIZE = 128*1024;
 	private int chunkSize=DEFAULT_CHUNK_SIZE;
 
 	/** uid -> user name and gid -> group name, learned from directory listings. */
@@ -397,6 +403,33 @@ public class SftpFileSourceFactory extends FileSourceFactory {
 			connect();
 		}
 		return op.run(sftp);
+	}
+
+	/**
+	 * Like sftp(), for calls that only read (stat, list, readlink, ...): if
+	 * the call fails because the channel or connection died during it, this
+	 * reconnects and tries once more. A missing file, a refused permission or
+	 * any other answer from a server that's still connected isn't retried.
+	 * Changes (mkdir, rename, ...) aren't retried either: the first attempt
+	 * may have happened before the connection dropped.
+	 */
+	synchronized <T> T sftpReadOnly(SftpOperation<T> op) throws IOException {
+		try {
+			return sftp(op);
+		} catch (NoSuchFileException | AccessDeniedException e) {
+			throw e;
+		} catch (IOException e) {
+			if( isConnected()) {
+				throw e;   // the server answered; trying again won't change that
+			}
+			logDebug("Connection lost during an SFTP call, reconnecting: "+e);
+			try {
+				return sftp(op);
+			} catch (IOException | RuntimeException e2) {
+				e2.addSuppressed(e);
+				throw e2;
+			}
+		}
 	}
 
 
@@ -731,7 +764,7 @@ public class SftpFileSourceFactory extends FileSourceFactory {
 
 	/** Lists a directory, remembering the owner and group names it shows. */
 	public List<SftpEntry> ls(String path) throws IOException {
-		List<SftpEntry> ret = sftp(c -> c.list(path));
+		List<SftpEntry> ret = sftpReadOnly(c -> c.list(path));
 		for (SftpEntry e : ret) {
 			rememberNames(e);
 		}
@@ -740,12 +773,12 @@ public class SftpFileSourceFactory extends FileSourceFactory {
 
 	/** Attributes of the path itself, not following a link. */
 	public SftpAttributes lstat(String path) throws IOException {
-		return sftp(c -> c.lstat(path));
+		return sftpReadOnly(c -> c.lstat(path));
 	}
 
 	/** Like lstat, but follows symbolic links. */
 	public SftpAttributes stat(String path) throws IOException {
-		return sftp(c -> c.stat(path));
+		return sftpReadOnly(c -> c.stat(path));
 	}
 
 	/**
@@ -758,11 +791,26 @@ public class SftpFileSourceFactory extends FileSourceFactory {
 		if( longName == null || a == null ) {
 			return;
 		}
-		String[] parts = longName.trim().split("\\s+");
+		String[] parts = WHITE_SPACE.split(longName.trim());
 		if( parts.length >= 4 ) {
-			userNames.putIfAbsent(a.getUId(), parts[2]);
-			groupNames.putIfAbsent(a.getGId(), parts[3]);
+			// put, not putIfAbsent: a listing's name replaces a number remembered by rememberUnknownNames
+			userNames.put(a.getUId(), parts[2]);
+			groupNames.put(a.getGId(), parts[3]);
 		}
+	}
+
+	private static final Pattern WHITE_SPACE = Pattern.compile("\\s+");
+
+	/**
+	 * Remembers that no listing could name this uid and gid (the directory
+	 * can't be listed, or the server sends no long names), so the numbers
+	 * stand in for the names. Without this every file with that owner listed
+	 * its whole directory again. A later listing that shows the names
+	 * replaces them.
+	 */
+	void rememberUnknownNames(int uid, int gid) {
+		userNames.putIfAbsent(uid, ""+uid);
+		groupNames.putIfAbsent(gid, ""+gid);
 	}
 
 	/** User name for a uid, if a listing has shown it; otherwise null. */
@@ -776,13 +824,13 @@ public class SftpFileSourceFactory extends FileSourceFactory {
 	}
 
 	public String readlink(String path) throws IOException {
-		return sftp(c -> c.readLink(path));
+		return sftpReadOnly(c -> c.readLink(path));
 	}
 
 	@Override
 	public FileSource getCurrentDirectory() throws  IOException {
 		if( currentDir == null ) {
-			currentDir = new SftpFileSource(this, sftp(c -> c.home()));
+			currentDir = new SftpFileSource(this, sftpReadOnly(c -> c.home()));
 		}
 		return currentDir;
 	}
@@ -827,35 +875,49 @@ public class SftpFileSourceFactory extends FileSourceFactory {
 			return remotePrinciple;
 		}
 
+		SharedSession session;
 		try {
 			connect();
+			synchronized (this) {
+				session = shared;
+			}
 		} catch (IOException e) {
 			logDebug("whoAmI: can't connect: "+e);
 			return super.whoAmI();
 		}
+		// Every factory on this connection is the same account, so the answer
+		// is kept on the connection; each factory used to run "id" again.
+		FileSourceUser known = session == null ? null : session.remoteUser;
+		if( known != null ) {
+			remotePrinciple = known;
+			return known;
+		}
 
+		FileSourceUser p = null;
 		try {
 			String id = runCommand("id");
-			FileSourceUser p = id == null ? null : FileSourceUser.fromId(id);
-			if( p !=null ) {
-				remotePrinciple = p;
-				return p;
-			}
+			p = id == null ? null : FileSourceUser.fromId(id);
 		} catch (IOException e) {
 			logDebug("whoAmI: 'id' failed, using the login directory's owner: "+e.getMessage());
 		}
 
-		try {
-			SftpAttributes home = sftp(c -> c.stat(c.home()));
-			String groupName = groupName(home.getGId());
-			remotePrinciple = new FileSourceUser(home.getUId(), getUser(),
-					home.getGId(), groupName == null ? ""+home.getGId() : groupName);
-			return remotePrinciple;
-		} catch (IOException e) {
-			logDebug("whoAmI: can't read the login directory: "+e);
+		if( p == null ) {
+			try {
+				SftpAttributes home = sftpReadOnly(c -> c.stat(c.home()));
+				String groupName = groupName(home.getGId());
+				p = new FileSourceUser(home.getUId(), getUser(),
+						home.getGId(), groupName == null ? ""+home.getGId() : groupName);
+			} catch (IOException e) {
+				logDebug("whoAmI: can't read the login directory: "+e);
+				return super.whoAmI();
+			}
 		}
 
-		return super.whoAmI();
+		remotePrinciple = p;
+		if( session != null ) {
+			session.remoteUser = p;
+		}
+		return p;
 	}
 
 	/** How long runCommand waits for a command to finish. */
@@ -867,7 +929,12 @@ public class SftpFileSourceFactory extends FileSourceFactory {
 	 * Needs shell access on the server.
 	 */
 	public String runCommand(String command) throws IOException {
-		SshConnection.ExecResult r = getConnection().exec(command, COMMAND_TIMEOUT_MS);
+		return runCommand(command, COMMAND_TIMEOUT_MS);
+	}
+
+	/** Like runCommand(command), waiting at most 'timeoutMs' for it to finish. */
+	public String runCommand(String command, long timeoutMs) throws IOException {
+		SshConnection.ExecResult r = getConnection().exec(command, timeoutMs);
 		String output = r.stdout + r.stderr;
 		if( r.exitStatus != 0) {
 			throw new IOException("status="+r.exitStatus+" ("+output+")");
