@@ -26,9 +26,7 @@ public class JschProvider implements SshProvider {
 			// A new JSch per connection, so identities don't pile up across connects
 			JSch jsch = new JSch();
 			if( s.strictHostKeyChecking ) {
-				jsch.setKnownHosts(s.knownHosts != null && !s.knownHosts.isEmpty()
-						? s.knownHosts
-						: System.getProperty("user.home")+"/.ssh/known_hosts");
+				jsch.setKnownHosts(SshProviders.knownHostsFile(s));
 			}
 			if( s.privateKey != null ) {
 				jsch.addIdentity(null, s.privateKey, null, null);
@@ -52,7 +50,13 @@ public class JschProvider implements SshProvider {
 			session.connect(s.connectTimeoutMs);
 			return new JschConnection(session, s.connectTimeoutMs);
 		} catch (JSchException e) {
-			throw new IOException(e.getMessage(), e);
+			String m = e.getMessage();
+			// by message, so the original JSch 0.1.55 is covered too (it has no exception types for these)
+			if( s.strictHostKeyChecking && m != null
+					&& (m.startsWith("reject HostKey") || m.startsWith("UnknownHostKey") || m.startsWith("HostKey has been changed"))) {
+				throw SshProviders.hostKeyRejected(s, m, e);
+			}
+			throw new IOException(m, e);
 		}
 	}
 }

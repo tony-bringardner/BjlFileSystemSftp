@@ -132,6 +132,8 @@ final class TestServer {
 		p.setProperty(SftpFileSourceFactory.PROP_HOST, HOST);
 		p.setProperty(SftpFileSourceFactory.PROP_PORT, ""+port);
 		p.setProperty(SftpFileSourceFactory.PROP_PASSWORD, PASSWORD);
+		// the test servers' keys aren't in known_hosts; host key checking has its own tests
+		p.setProperty(SftpFileSourceFactory.PROP_STRICT_HOST_KEY_CHECKING, "no");
 		if( implementation != null ) {
 			p.setProperty(SftpFileSourceFactory.PROP_IMPLEMENTATION, implementation);
 		}

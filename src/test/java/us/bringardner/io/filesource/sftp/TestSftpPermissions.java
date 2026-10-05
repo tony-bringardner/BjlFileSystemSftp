@@ -101,6 +101,8 @@ public class TestSftpPermissions {
 		p.setProperty("host", "localhost");
 		p.setProperty("port", ""+port);
 		p.setProperty("password",password);
+		// the test servers' keys aren't in known_hosts; host key checking has its own tests
+		p.setProperty(SftpFileSourceFactory.PROP_STRICT_HOST_KEY_CHECKING, "no");
 		ret.setConnectionProperties(p);		
 
 		assertTrue(ret.connect(),"Factory did not start.");

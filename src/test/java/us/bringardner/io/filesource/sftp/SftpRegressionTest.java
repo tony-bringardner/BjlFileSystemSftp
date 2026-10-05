@@ -116,6 +116,8 @@ public class SftpRegressionTest {
 		p.setProperty("port", ""+port());
 		p.setProperty("password", password);
 		p.setProperty("implementation", impl);
+		// the test servers' keys aren't in known_hosts; host key checking has its own tests
+		p.setProperty(SftpFileSourceFactory.PROP_STRICT_HOST_KEY_CHECKING, "no");
 		f.setConnectionProperties(p);
 		return f;
 	}

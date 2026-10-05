@@ -92,6 +92,8 @@ public class SftpCanonicalPathTest {
 		p.setProperty(SftpFileSourceFactory.PROP_PASSWORD, PASSWORD);
 		// always ask the server: links are created behind its back
 		p.setProperty(SftpFileSourceFactory.PROP_ATTRIBUTE_CACHE_TTL, "0");
+		// the test servers' keys aren't in known_hosts; host key checking has its own tests
+		p.setProperty(SftpFileSourceFactory.PROP_STRICT_HOST_KEY_CHECKING, "no");
 		factory.setConnectionProperties(p);
 		assertTrue(factory.connect(), "factory did not connect");
 	}

@@ -16,6 +16,7 @@ import org.apache.sshd.client.keyverifier.KnownHostsServerKeyVerifier;
 import org.apache.sshd.client.keyverifier.RejectAllServerKeyVerifier;
 import org.apache.sshd.client.session.ClientSession;
 import org.apache.sshd.common.NamedResource;
+import org.apache.sshd.common.SshException;
 import org.apache.sshd.common.util.security.SecurityUtils;
 import org.apache.sshd.core.CoreModuleProperties;
 
@@ -43,9 +44,7 @@ public class MinaProvider implements SshProvider {
 		boolean ok = false;
 		try {
 			if( s.strictHostKeyChecking ) {
-				Path knownHosts = s.knownHosts != null && !s.knownHosts.isEmpty()
-						? Paths.get(s.knownHosts)
-						: Paths.get(System.getProperty("user.home"), ".ssh", "known_hosts");
+				Path knownHosts = Paths.get(SshProviders.knownHostsFile(s));
 				client.setServerKeyVerifier(new KnownHostsServerKeyVerifier(RejectAllServerKeyVerifier.INSTANCE, knownHosts));
 			} else {
 				client.setServerKeyVerifier(AcceptAllServerKeyVerifier.INSTANCE);
@@ -60,7 +59,12 @@ public class MinaProvider implements SshProvider {
 			client.start();
 
 			Duration timeout = s.connectTimeoutMs > 0 ? Duration.ofMillis(s.connectTimeoutMs) : Duration.ofDays(365);
-			ClientSession session = client.connect(s.user, s.host, s.port).verify(timeout).getSession();
+			ClientSession session;
+			try {
+				session = client.connect(s.user, s.host, s.port).verify(timeout).getSession();
+			} catch (SshException e) {
+				throw hostKeyError(s, e);
+			}
 			try {
 				if( s.password != null ) {
 					session.addPasswordIdentity(s.password);
@@ -69,6 +73,9 @@ public class MinaProvider implements SshProvider {
 					session.addPublicKeyIdentity(kp);
 				}
 				session.auth().verify(timeout);
+			} catch (SshException e) {
+				session.close(true);
+				throw hostKeyError(s, e);
 			} catch (IOException | RuntimeException e) {
 				session.close(true);
 				throw e;
@@ -80,6 +87,18 @@ public class MinaProvider implements SshProvider {
 				client.stop();
 			}
 		}
+	}
+
+	/**
+	 * A rejected host key, as SshProviders.hostKeyRejected; any other error as
+	 * it is. MINA reports the rejection (unknown or changed key) as this
+	 * message, during the connect or the login that follows it.
+	 */
+	private static IOException hostKeyError(SshSettings s, SshException e) {
+		if( s.strictHostKeyChecking && "Server key did not validate".equals(e.getMessage())) {
+			return SshProviders.hostKeyRejected(s, e.getMessage(), e);
+		}
+		return e;
 	}
 
 	private static Iterable<KeyPair> loadKeys(SshSettings s) throws IOException {

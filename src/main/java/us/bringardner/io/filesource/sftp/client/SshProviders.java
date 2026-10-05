@@ -32,6 +32,29 @@ public final class SshProviders {
 		return name == null || name.trim().isEmpty() ? DEFAULT : name.trim().toLowerCase(Locale.ROOT);
 	}
 
+	/** The known_hosts file used for host key checking: the setting, else ~/.ssh/known_hosts. */
+	public static String knownHostsFile(SshSettings s) {
+		return s.knownHosts != null && !s.knownHosts.isEmpty()
+				? s.knownHosts
+				: System.getProperty("user.home")+"/.ssh/known_hosts";
+	}
+
+	/**
+	 * The error for a server whose host key the known_hosts file doesn't
+	 * vouch for, saying what to do about it. The libraries' own messages
+	 * ("reject HostKey: host", "Server key did not validate") don't.
+	 */
+	public static java.io.IOException hostKeyRejected(SshSettings s, String detail, Throwable cause) {
+		String file = knownHostsFile(s);
+		return new java.io.IOException("The host key of "+s.host+":"+s.port+" isn't in "+file
+				+", or doesn't match the one there ("+detail+"). Host keys are checked by default"
+				+" (strictHostKeyChecking=yes). If you trust this server, add its key to "+file
+				+", for example: ssh-keyscan -p "+s.port+" "+s.host+" >> "+file
+				+" (compare the fingerprint with the server's first). If the key was there and"
+				+" changed without a reason, the server may be impersonated. Setting"
+				+" strictHostKeyChecking=no accepts any server.", cause);
+	}
+
 	/**
 	 * @param name "jsch" or "mina" (case-insensitive); null or empty for the default
 	 * @throws IllegalArgumentException for any other name

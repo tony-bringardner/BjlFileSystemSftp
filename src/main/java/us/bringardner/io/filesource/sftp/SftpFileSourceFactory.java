@@ -80,8 +80,14 @@ public class SftpFileSourceFactory extends FileSourceFactory {
 	public static final String PROP_PASSWORD = "password";
 	/** Path of a known_hosts file used to check the server's host key. */
 	public static final String PROP_KNOWN_HOSTS = "knownHosts";
-	/** "no" (default) accepts any host key; "yes" requires it to be in the known_hosts file. */
+	/**
+	 * "yes" (the default since batch 22) connects only to servers whose host
+	 * key is in the known_hosts file (PROP_KNOWN_HOSTS, else
+	 * ~/.ssh/known_hosts); "no" accepts any server, which lets one be
+	 * impersonated.
+	 */
 	public static final String PROP_STRICT_HOST_KEY_CHECKING = "strictHostKeyChecking";
+	public static final String DEFAULT_STRICT_HOST_KEY_CHECKING = "yes";
 	public static final String PROP_CONNECT_TIMEOUT = "connectTimeout";
 	public static final String PROP_SERVER_ALIVE_INTERVAL = "serverAliveInterval";
 	/** SSH library: "jsch" or "mina"; empty means the system property bjl.sftp.implementation, else jsch. */
@@ -195,7 +201,7 @@ public class SftpFileSourceFactory extends FileSourceFactory {
 	private byte [] privateKey;
 	private int port = DEFAULT_PORT;
 	private String knownHosts;
-	private String strictHostKeyChecking = "no";
+	private String strictHostKeyChecking = DEFAULT_STRICT_HOST_KEY_CHECKING;
 	private int connectTimeout = DEFAULT_CONNECT_TIMEOUT;
 	private int serverAliveInterval = DEFAULT_SERVER_ALIVE_INTERVAL;
 	/** "jsch", "mina", or null for the default (see SshProviders). */
@@ -338,12 +344,14 @@ public class SftpFileSourceFactory extends FileSourceFactory {
 	}
 
 	/**
-	 * "no" (the default) accepts any host key, which lets a server be
-	 * impersonated. "yes" rejects keys that aren't in the known_hosts file.
+	 * "yes" (the default) rejects servers whose host key isn't in the
+	 * known_hosts file, or doesn't match it; the error says how to add it.
+	 * "no" accepts any host key, which lets a server be impersonated. Null or
+	 * empty means the default. (The default was "no" before batch 22.)
 	 */
 	public void setStrictHostKeyChecking(String value) {
 		if( value == null || value.trim().isEmpty()) {
-			value = "no";
+			value = DEFAULT_STRICT_HOST_KEY_CHECKING;
 		}
 		value = value.trim().toLowerCase();
 		if( !value.equals("yes") && !value.equals("no")) {

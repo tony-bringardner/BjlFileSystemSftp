@@ -123,6 +123,8 @@ public class TestSftpRandomAccessIoController {
 		p.setProperty("host", host);
 		p.setProperty("port", ""+port);
 		p.setProperty("password",""+password);
+		// the test servers' keys aren't in known_hosts; host key checking has its own tests
+		p.setProperty(SftpFileSourceFactory.PROP_STRICT_HOST_KEY_CHECKING, "no");
 		factory.setConnectionProperties(p);		
 
 		assertTrue(factory.connect(),"Factory did not start.");
