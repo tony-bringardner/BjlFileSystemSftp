@@ -92,7 +92,7 @@ public class SftpRandomAccessIoController extends AbstractRandomAccessIoControll
 				if( readOnly ) {
 					throw e;
 				}
-				channel.write(path, false).close();   // create it, like RandomAccessFile "rw"
+				channel.createNew(path);   // create it, like RandomAccessFile "rw"; never truncates
 				fileChanged();
 				a = channel.stat(path);
 			}
@@ -191,7 +191,7 @@ public class SftpRandomAccessIoController extends AbstractRandomAccessIoControll
 				handle = channel.open(file.getAbsolutePath(), true);
 			} catch (NoSuchFileException e) {
 				// like RandomAccessFile in "rw" mode: create it
-				channel.write(file.getAbsolutePath(), false).close();
+				channel.createNew(file.getAbsolutePath());   // never truncates one created meanwhile
 				fileChanged();
 				handle = channel.open(file.getAbsolutePath(), true);
 			} catch (AccessDeniedException e) {

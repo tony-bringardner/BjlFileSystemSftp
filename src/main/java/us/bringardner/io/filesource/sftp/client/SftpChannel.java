@@ -78,6 +78,15 @@ public interface SftpChannel extends Closeable {
 	OutputStream write(String path, boolean append) throws IOException;
 
 	/**
+	 * Creates an empty file if nothing is at 'path'. An existing file (or
+	 * link) is never truncated or changed, even one created a moment ago by
+	 * another program.
+	 *
+	 * @return true if the file was created, false if something was already there
+	 */
+	boolean createNew(String path) throws IOException;
+
+	/**
 	 * Opens an existing file for reading and writing at any position.
 	 *
 	 * @param write false opens it read-only; writes then fail

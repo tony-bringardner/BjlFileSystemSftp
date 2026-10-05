@@ -20,7 +20,7 @@ BjlFileSystemFtp, BjlFileSystemJdbc. They live next to this repo in
 
 ## Building and testing
 
-- `mvn package` runs the whole suite. At batch 15 that was 148 tests.
+- `mvn package` runs the whole suite. At batch 16 that was 166 tests.
 - `TestServer` picks the server once per run, by `-Dbjl.sftp.test.server`:
   - `auto` (the default) uses OpenSSH on **localhost:22** if `unittest1` /
     `0000` can log in, otherwise the embedded server.
@@ -102,7 +102,10 @@ The full review is in the claude.ai project "FileSystem", in
   `SftpPropertyEditPanelTest` checks this.
 - **Batch 15 is merged.** Without an OpenSSH server, the tests run on the
   embedded server (see Building and testing).
-- **The review is complete.** Nothing is open.
+- **Batch 16 is on its branch, not merged yet** (below).
+- **The review is complete.** The rest of the second review's list is open:
+  connecting while holding the global `sessions` lock, no limit on channels
+  per connection, and metadata calls serialized on the factory's channel.
 - **Deferred:** CI. Tony isn't ready for it. A workflow would have to build
   BjlCore, BjlIo and BjlFileSystem first, because they're unpublished
   SNAPSHOTs. `TestSftpRandomAccessIoController` and `SftpCanonicalPathTest`
@@ -147,3 +150,28 @@ The full review is in the claude.ai project "FileSystem", in
   stream left open, close-then-open at the limit, and disconnect. No test
   reliably fails without the MINA close wait. The race showed up once and
   couldn't be reproduced on localhost.
+
+## Batch 16: data-safety and MINA stream speed (`fix/sftp-review-16`)
+
+- `SftpChannel.createNew(path)` creates an empty file only if nothing is
+  there and never truncates. MINA sends one exclusive open (`SSH_FXF_EXCL`).
+  JSch's public API can't send that flag, so it checks with `lstat`, then
+  opens with APPEND (create, no truncate). If another program creates the
+  file in between, its data is kept and the call still returns true.
+- `createNewFile()` uses it and, like `java.io.File`, returns false if the
+  file was already there. It used to trust the cached `exists()` and then
+  open with truncate, so a file created elsewhere in the cache window was
+  emptied. The "rw" create in `SftpRandomAccessIoController` uses it too.
+- `renameTo` returns false unless the destination is on the same server
+  account (`isSameFileSystem`). It used to rename to the destination's path
+  on *this* server.
+- The `can*()` permission getters and `lastAccessTime()` answer false and 0
+  for a missing file instead of throwing NullPointerException. The setters
+  for the two file times check for null too.
+- `MinaSftpChannel.read` (plain `getInputStream`) uses MINA's pipelined
+  `SftpInputStreamAsync`, with the file's size as the hint (one extra `stat`
+  on the handle). An empty file keeps the one-request-at-a-time reader,
+  because a size hint of 0 means "no limit" to MINA. A 2 MB stream through
+  `DelayProxy` took 73 round trips before and takes about 9 now.
+- `SftpBatch16Test` and three new tests in `SftpReadAheadTest` check this
+  with both libraries.

@@ -1,5 +1,6 @@
 package us.bringardner.io.filesource.sftp.client.mina;
 
+import java.io.FilterInputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
@@ -16,6 +17,8 @@ import org.apache.sshd.sftp.client.SftpClient.Attributes;
 import org.apache.sshd.sftp.client.SftpClient.CloseableHandle;
 import org.apache.sshd.sftp.client.SftpClient.DirEntry;
 import org.apache.sshd.sftp.client.SftpClient.OpenMode;
+import org.apache.sshd.sftp.client.impl.AbstractSftpClient;
+import org.apache.sshd.sftp.client.impl.SftpInputStreamAsync;
 import org.apache.sshd.sftp.common.SftpConstants;
 import org.apache.sshd.sftp.common.SftpException;
 
@@ -195,10 +198,32 @@ class MinaSftpChannel implements SftpChannel {
 		return call(".", () -> sftp.canonicalPath("."));
 	}
 
+	/**
+	 * Reads from 'offset' with MINA's pipelined reader, which keeps several
+	 * requests in flight, so a stream doesn't wait one round trip per
+	 * BUFFER_SIZE bytes (it used to: 64 round trips for 2 MB). The file's
+	 * size is the reader's hint for how far ahead to ask; past it, reading
+	 * goes on one request at a time, so a file that grows is read to its end.
+	 * An empty file, or a client that isn't MINA's own, uses one request at a
+	 * time from the start.
+	 */
 	@Override
 	public InputStream read(String path, long offset) throws IOException {
 		CloseableHandle h = call(path, () -> sftp.open(path, EnumSet.of(OpenMode.Read)));
-		return new HandleInputStream(this, path, h, offset);
+		try {
+			if( sftp instanceof AbstractSftpClient ) {
+				long size = call(path, () -> sftp.stat(h).getSize());
+				if( size > 0 ) {   // 0 means "no hint" to the reader, which would then ask far ahead
+					// 'true': closing the stream closes the handle
+					return new PipelinedInputStream(path, new SftpInputStreamAsync((AbstractSftpClient) sftp,
+							BUFFER_SIZE, offset, size, path, h, true));
+				}
+			}
+			return new HandleInputStream(this, path, h, offset);
+		} catch (IOException | RuntimeException e) {
+			IoUtils.closeQuietly(h);
+			throw e;
+		}
 	}
 
 	@Override
@@ -207,6 +232,27 @@ class MinaSftpChannel implements SftpChannel {
 				append
 				? EnumSet.of(OpenMode.Write, OpenMode.Create, OpenMode.Append)
 				: EnumSet.of(OpenMode.Write, OpenMode.Create, OpenMode.Truncate)));
+	}
+
+	/** One exclusive open (SSH_FXF_EXCL), so the check and the create can't be split by another program. */
+	@Override
+	public boolean createNew(String path) throws IOException {
+		try {
+			call(path, () -> {
+				sftp.open(path, EnumSet.of(OpenMode.Write, OpenMode.Create, OpenMode.Exclusive)).close();
+				return null;
+			});
+			return true;
+		} catch (IOException e) {
+			// SFTP v3 has no "already exists" status; OpenSSH answers SSH_FX_FAILURE
+			try {
+				lstat(path);
+			} catch (IOException e2) {
+				e.addSuppressed(e2);
+				throw e;
+			}
+			return false;
+		}
 	}
 
 	@Override
@@ -235,6 +281,40 @@ class MinaSftpChannel implements SftpChannel {
 			// closing anyway
 		} finally {
 			IoUtils.closeQuietly(sftp);
+		}
+	}
+
+	/** MINA's pipelined reader, with its errors turned into the types SftpChannel promises. */
+	static class PipelinedInputStream extends FilterInputStream {
+		private final String path;
+
+		PipelinedInputStream(String path, SftpInputStreamAsync in) {
+			super(in);
+			this.path = path;
+		}
+
+		@Override
+		public int read() throws IOException {
+			return call(path, () -> in.read());
+		}
+
+		@Override
+		public int read(byte[] b, int off, int len) throws IOException {
+			java.util.Objects.checkFromIndexSize(off, len, b.length);
+			if( len == 0 ) {
+				return 0;
+			}
+			return call(path, () -> in.read(b, off, len));
+		}
+
+		@Override
+		public long skip(long n) throws IOException {
+			return call(path, () -> in.skip(n));
+		}
+
+		@Override
+		public void close() throws IOException {
+			call(path, () -> { in.close(); return null; });
 		}
 	}
 

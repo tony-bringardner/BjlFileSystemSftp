@@ -172,6 +172,11 @@ class PooledSftpChannel implements SftpChannel {
 	}
 
 	@Override
+	public boolean createNew(String path) throws IOException {
+		return call(() -> channel.createNew(path));
+	}
+
+	@Override
 	public SftpFile open(String path, boolean write) throws IOException {
 		SftpFile f = call(() -> channel.open(path, write));
 		opened();

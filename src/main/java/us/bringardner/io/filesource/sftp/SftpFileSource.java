@@ -528,59 +528,71 @@ public class SftpFileSource extends BaseObject implements FileSource {
 		return FileProxy.getContentType(getName());
 	}
 
+	/**
+	 * One character of the "-rwxr-xr-x" permission string, or ' ' if the file
+	 * doesn't exist (so every permission check answers false).
+	 */
+	private char permissionChar(int idx) throws IOException {
+		SftpAttributes a = getAttr();
+		return a == null ? ' ' : a.getPermissionsString().charAt(idx);
+	}
+
 	@Override
 	public boolean canOwnerRead() throws IOException {
-		return (getAttr().getPermissionsString().charAt(1) == 'r');//-rw-r--r--;
+		return permissionChar(1) == 'r';
 	}
 
 	@Override
 	public boolean canOwnerWrite() throws IOException {
-		return (getAttr().getPermissionsString().charAt(2) == 'w');//-rw-r--r--;
+		return permissionChar(2) == 'w';
 	}
 
 	@Override
 	public boolean canOwnerExecute() throws IOException {
-		return (getAttr().getPermissionsString().charAt(3) == 'x');//drwxr--r--;
+		return permissionChar(3) == 'x';
 	}
 
 	@Override
 	public boolean canGroupRead() throws IOException {
-		return (getAttr().getPermissionsString().charAt(4) == 'r');//d---rwx---;
+		return permissionChar(4) == 'r';
 	}
 
 	@Override
 	public boolean canGroupWrite() throws IOException {
-		return (getAttr().getPermissionsString().charAt(5) == 'w');//d---rwx---;
+		return permissionChar(5) == 'w';
 	}
 
 	@Override
 	public boolean canGroupExecute() throws IOException {
-		return (getAttr().getPermissionsString().charAt(6) == 'x');//d---rwx---;
+		return permissionChar(6) == 'x';
 	}
 
 	@Override
 	public boolean canOtherRead() throws IOException {
-		return (getAttr().getPermissionsString().charAt(7) == 'r');//d------rwx;
+		return permissionChar(7) == 'r';
 	}
 
 	@Override
 	public boolean canOtherWrite() throws IOException {
-		return (getAttr().getPermissionsString().charAt(8) == 'w');//d------rwx;
+		return permissionChar(8) == 'w';
 	}
 
 	@Override
 	public boolean canOtherExecute() throws IOException {
-		return (getAttr().getPermissionsString().charAt(9) == 'x');//d------rwx;
+		return permissionChar(9) == 'x';
 	}
 
+	/**
+	 * Creates an empty file if, and only if, nothing is at this path, like
+	 * java.io.File: true if it was created, false if something was already
+	 * there. It used to check the cached exists() and then open with truncate,
+	 * so a file created elsewhere since the cache was filled was emptied.
+	 */
 	@Override
-	public boolean createNewFile() throws IOException {
-		if( !exists()) {
-			try(OutputStream out =  getOutputStream()) {
-
-			}
-		}
-		return exists();
+	public synchronized boolean createNewFile() throws IOException {
+		boolean created = factory.sftp(c -> c.createNew(path));
+		clearAttr();
+		return created;
 	}
 
 	@Override
@@ -849,21 +861,19 @@ public class SftpFileSource extends BaseObject implements FileSource {
 		String myName = path;
 		String yourName = dest.getAbsolutePath();
 
+		// Only within one server account: the rename runs on this server, so a
+		// destination on another server used to rename to its path here.
+		if( !(dest instanceof SftpFileSource) || !((SftpFileSource) dest).factory.isSameFileSystem(factory)) {
+			return false;
+		}
+		SftpFileSource fs = (SftpFileSource) dest;
 		boolean ret = false;
-		if(exists() && 
-				!dest.exists()				
-				) {
-
-			if (dest instanceof SftpFileSource) {
-				SftpFileSource fs = (SftpFileSource) dest;
-
-
-				if( !(myName.equals("/") || yourName.equals("/") || myName.equals(yourName))) {
-					factory.sftp(c -> { c.rename(myName, yourName); return null; });
-					ret = true;
-					fs.clearAttr();
-					clearAttr();
-				}	
+		if( exists() && !dest.exists()) {
+			if( !(myName.equals("/") || yourName.equals("/") || myName.equals(yourName))) {
+				factory.sftp(c -> { c.rename(myName, yourName); return null; });
+				ret = true;
+				fs.clearAttr();
+				clearAttr();
 			}
 		}
 		return ret;
@@ -875,7 +885,8 @@ public class SftpFileSource extends BaseObject implements FileSource {
 		int time2 = (int)(time/1000);
 		factory.sftp(c -> { c.setModifiedTime(path, time2); return null; });
 		attr = null;
-		ret = getAttr().getMTime()==time2;
+		SftpAttributes a = getAttr();   // null if it was deleted meanwhile
+		ret = a != null && a.getMTime()==time2;
 		
 		return ret;
 	}
@@ -1258,7 +1269,8 @@ public class SftpFileSource extends BaseObject implements FileSource {
 
 	@Override
 	public long lastAccessTime() throws IOException {
-		return getAttr().getATime()*1000L;
+		SftpAttributes a = getAttr();
+		return a == null ? 0 : a.getATime()*1000L;
 	}
 
 	@Override
@@ -1272,7 +1284,8 @@ public class SftpFileSource extends BaseObject implements FileSource {
 		int time2 = (int)(time/1000);
 		factory.sftp(c -> { c.setAccessTime(path, time2); return null; });
 		attr = null;
-		return getAttr().getATime() == time2;
+		SftpAttributes a = getAttr();   // null if it was deleted meanwhile
+		return a != null && a.getATime() == time2;
 	}
 
 	@Override

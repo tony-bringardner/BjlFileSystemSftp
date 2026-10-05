@@ -211,6 +211,24 @@ class JschSftpChannel implements SftpChannel {
 		return call(path, () -> sftp.put(path, append ? ChannelSftp.APPEND : ChannelSftp.OVERWRITE));
 	}
 
+	/**
+	 * JSch's public API can't send SFTP's exclusive-create flag, so this
+	 * checks first and then opens with APPEND, which creates the file but
+	 * never truncates it (CREAT without TRUNC). If another program creates
+	 * the file in between, its contents are kept and this returns true.
+	 */
+	@Override
+	public boolean createNew(String path) throws IOException {
+		try {
+			lstat(path);
+			return false;
+		} catch (NoSuchFileException e) {
+			// nothing there yet
+		}
+		call(path, () -> sftp.put(path, ChannelSftp.APPEND)).close();
+		return true;
+	}
+
 	@Override
 	public SftpFile open(String path, boolean write) throws IOException {
 		stat(path);   // throws NoSuchFileException if it isn't there

@@ -309,6 +309,70 @@ public class SftpReadAheadTest {
 	}
 
 	/**
+	 * A plain getInputStream() pass (batch 16). MINA's stream used to wait
+	 * for each 32 KB request before sending the next: 64+ round trips here.
+	 */
+	@ParameterizedTest
+	@ValueSource(strings = {"jsch", "mina"})
+	void sequentialStreamReadIsPipelined(String impl) throws IOException {
+		byte[] data = random(BIG, 10);
+		String path = write(impl, "speed-stream.bin", data);
+		FileSource f = slowFactory(impl).createFileSource(path);
+		byte[] back;
+		try (InputStream in = f.getInputStream()) {
+			long start = System.currentTimeMillis();   // opening the channel and file isn't part of the pass
+			back = in.readAllBytes();
+			assertFewRoundTrips(impl+" stream", System.currentTimeMillis() - start);
+		}
+		assertArrayEquals(data, back);
+	}
+
+	/** Streams from an offset, past the end, of an empty file, and read byte by byte. */
+	@ParameterizedTest
+	@ValueSource(strings = {"jsch", "mina"})
+	void streamReadsFromAnyOffset(String impl) throws IOException {
+		byte[] data = random(3 * CHUNK + 100, 11);
+		FileSource f = factory(impl).createFileSource(write(impl, "offsets.bin", data));
+		for (long offset : new long[] {0, 1, CHUNK - 1, CHUNK, 2 * CHUNK + 7, data.length - 1}) {
+			try (InputStream in = f.getInputStream(offset)) {
+				assertArrayEquals(Arrays.copyOfRange(data, (int) offset, data.length), in.readAllBytes(),
+						"from "+offset);
+				assertEquals(-1, in.read());
+			}
+		}
+		try (InputStream in = f.getInputStream(data.length + 10)) {
+			assertEquals(-1, in.read(), "past the end");
+		}
+		try (InputStream in = f.getInputStream(5)) {
+			for (int i = 5; i < 5 + 2 * CHUNK; i++) {
+				assertEquals(data[i] & 0xFF, in.read(), "byte "+i);
+			}
+		}
+		FileSource empty = factory(impl).createFileSource(write(impl, "empty.bin", new byte[0]));
+		try (InputStream in = empty.getInputStream()) {
+			assertEquals(-1, in.read());
+		}
+	}
+
+	/** Closing a stream early leaves the channel usable for the next one. */
+	@ParameterizedTest
+	@ValueSource(strings = {"jsch", "mina"})
+	void streamClosedEarlyThenAnother(String impl) throws IOException {
+		byte[] data = random(BIG, 12);
+		FileSource f = factory(impl).createFileSource(write(impl, "early.bin", data));
+		for (int i = 0; i < 5; i++) {
+			try (InputStream in = f.getInputStream()) {
+				byte[] b = new byte[100];
+				assertEquals(100, in.readNBytes(b, 0, 100));
+				assertArrayEquals(Arrays.copyOf(data, 100), b);
+			}
+		}
+		try (InputStream in = f.getInputStream()) {
+			assertArrayEquals(data, in.readAllBytes());
+		}
+	}
+
+	/**
 	 * A TCP proxy to localhost that holds each piece of data for a fixed time
 	 * before passing it on, in order, both ways: latency without a bandwidth
 	 * limit.
