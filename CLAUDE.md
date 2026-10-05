@@ -20,7 +20,7 @@ BjlFileSystemFtp, BjlFileSystemJdbc. They live next to this repo in
 
 ## Building and testing
 
-- `mvn package` runs the whole suite. At batch 16 that was 166 tests.
+- `mvn package` runs the whole suite. At batch 17 that was 186 tests.
 - `TestServer` picks the server once per run, by `-Dbjl.sftp.test.server`:
   - `auto` (the default) uses OpenSSH on **localhost:22** if `unittest1` /
     `0000` can log in, otherwise the embedded server.
@@ -62,7 +62,7 @@ BjlFileSystemFtp, BjlFileSystemJdbc. They live next to this repo in
     `refresh()`).
   - Changes made through the same object are seen at once.
 - `SftpRandomAccessIoController` and `SftpSeekableInputStream`: random access
-  in chunks (`getChunkSize()`, 32 KB). Each borrows its own SFTP channel.
+  in chunks (`getChunkSize()`, 128 KB since batch 17). Each borrows its own SFTP channel.
 - Streams, random-access files and seekable streams get their channel from
   `factory.openSftp()`, not `getConnection().openSftp()`. It borrows from the
   shared session's `SftpChannelPool` (at most 4 idle). The channel comes back
@@ -102,7 +102,8 @@ The full review is in the claude.ai project "FileSystem", in
   `SftpPropertyEditPanelTest` checks this.
 - **Batch 15 is merged.** Without an OpenSSH server, the tests run on the
   embedded server (see Building and testing).
-- **Batch 16 is on its branch, not merged yet** (below).
+- **Batch 16 is merged** (below).
+- **Batch 17 is on its branch, not merged yet** (below).
 - **The review is complete.** The rest of the second review's list is open:
   connecting while holding the global `sessions` lock, no limit on channels
   per connection, and metadata calls serialized on the factory's channel.
@@ -175,3 +176,34 @@ The full review is in the claude.ai project "FileSystem", in
   `DelayProxy` took 73 round trips before and takes about 9 now.
 - `SftpBatch16Test` and three new tests in `SftpReadAheadTest` check this
   with both libraries.
+
+## Batch 17: time limits, round trips, dead connections (`fix/sftp-review-17`)
+
+- `JschConnection.exec`: a timer on one daemon thread closes the channel when
+  the time limit runs out, which ends the read. It used to read stdout to EOF
+  with no limit first, so a hung command (`id` in `whoAmI`) blocked forever.
+  The read must block: JSch's pipe (a JDK `PipedInputStream`) only wakes its
+  writer when a blocking read finds it empty, so polling `available()` moved
+  32 KB a second. `runCommand(command, timeoutMs)` sets the limit.
+- `JschSftpChannel.open` no longer stats first; the read it opens fails the
+  same way for a missing file. Opening a stream to read no longer clears the
+  file's cached attributes.
+- `DEFAULT_CHUNK_SIZE` is 128 KB (was 32 KB). `SftpReadAheadTest` sets its
+  factories to 32 KB, since its counts assume that.
+- Owner names: when no listing can name a uid/gid, the numbers are
+  remembered (`rememberUnknownNames`), so the next file with that owner
+  doesn't list its directory again. Listings now `put` names, replacing them.
+- `whoAmI` keeps its answer on the shared connection, so other factories on
+  it (including `createThreadSafeCopy()`) don't run `id` again.
+- MINA sets `HEARTBEAT_NO_REPLY_MAX` to 3 when `serverAliveInterval` is set.
+  Before, its keepalives expected no reply, so a silent connection was never
+  dropped. JSch already drops it (its ServerAliveCountMax is 1).
+- `sftpReadOnly(op)` (stat, lstat, list, readlink, home): if the call fails
+  and the factory is no longer connected, it reconnects and tries once more.
+  Missing files, refused permissions, answers from a live server, and every
+  change (mkdir, rename, ...) are not retried.
+- `SftpBatch17Test` checks this with both libraries. It counts server calls
+  with a `CountingFactory` subclass, counts JSch stats through
+  `client/jsch/JschTestAccess`, breaks the factory's channel with a
+  reflection-injected proxy, and silences a connection with
+  `DelayProxy.freeze()`. The 4 shell-command tests need OpenSSH.
