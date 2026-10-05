@@ -97,6 +97,20 @@ public class SftpFileSourceFactory extends FileSourceFactory {
 	public static final int DEFAULT_PORT = 22;
 	public static final int DEFAULT_CONNECT_TIMEOUT = 30_000;
 	public static final int DEFAULT_SERVER_ALIVE_INTERVAL = 30_000;
+	/**
+	 * Most SFTP channels (plus command channels) open at once on a shared
+	 * connection; see SftpChannelPool. Servers limit them: OpenSSH allows 10
+	 * per connection (MaxSessions). Not part of the session key: the first
+	 * factory to connect sets it for everyone sharing the connection.
+	 */
+	public static final String PROP_MAX_CHANNELS = "maxChannels";
+	public static final int DEFAULT_MAX_CHANNELS = 8;
+	/**
+	 * Milliseconds to wait for a channel when all maxChannels are in use,
+	 * before failing (0 = fail at once). Set like PROP_MAX_CHANNELS.
+	 */
+	public static final String PROP_CHANNEL_WAIT_TIMEOUT = "channelWaitTimeout";
+	public static final long DEFAULT_CHANNEL_WAIT_TIMEOUT = 30_000;
 
 	/**
 	 * This code was taken from sun.nio.fs.UnixFileModeAttribute
@@ -130,24 +144,24 @@ public class SftpFileSourceFactory extends FileSourceFactory {
 
 	/**
 	 * An SSH connection shared by every factory that connects with the same
-	 * connection details, credentials and library (see getSessionKey()). Each
-	 * factory opens its own SFTP channel over it, because one channel must
-	 * not be used by two threads at once.
+	 * connection details, credentials and library (see getSessionKey()). All
+	 * of them borrow SFTP channels from its pool: one channel must not be used
+	 * by two threads at once, so each call or stream has one to itself.
 	 */
 	private static class SharedSession {
 		final String key;
 		final SshConnection connection;
 		/** Number of factories holding this connection; guarded by 'sessions'. */
 		int refs = 1;
-		/** Idle SFTP channels for streams; closed with the connection. */
+		/** The SFTP channels, for calls and streams; closed with the connection. */
 		final SftpChannelPool pool;
 		/** The remote user (see whoAmI), worked out once per connection. */
 		volatile FileSourceUser remoteUser;
 
-		SharedSession(String key, SshConnection connection) {
+		SharedSession(String key, SshConnection connection, int maxChannels, long channelWaitMs) {
 			this.key = key;
 			this.connection = connection;
-			this.pool = new SftpChannelPool(connection);
+			this.pool = new SftpChannelPool(connection, maxChannels, channelWaitMs);
 		}
 	}
 
@@ -159,7 +173,7 @@ public class SftpFileSourceFactory extends FileSourceFactory {
 	 */
 	private static final Map<String,CompletableFuture<SharedSession>> connecting = new HashMap<>();
 
-	/** An SFTP call made on this factory's channel; see sftp(). */
+	/** An SFTP call made on a channel borrowed for it; see sftp(). */
 	public interface SftpOperation<T> {
 		T run(SftpChannel sftp) throws IOException;
 	}
@@ -179,14 +193,19 @@ public class SftpFileSourceFactory extends FileSourceFactory {
 	private String implementation;
 	/** See PROP_ATTRIBUTE_CACHE_TTL; volatile because files read it from any thread. */
 	private volatile long attributeCacheTtl = defaultAttributeCacheTtl();
+	private int maxChannels = DEFAULT_MAX_CHANNELS;
+	private long channelWaitTimeout = DEFAULT_CHANNEL_WAIT_TIMEOUT;
 
-	/** The shared connection this factory holds a reference to, or null. */
-	private SharedSession shared;
-	/** This factory's own SFTP channel; only used inside sftp(), which locks the factory. */
-	private SftpChannel sftp;
+	/**
+	 * The shared connection this factory holds a reference to, or null.
+	 * Changed only by connectImpl/disConnectImpl (which lock the factory);
+	 * volatile so the rest can read it without the lock.
+	 */
+	private volatile SharedSession shared;
 
-	private FileSource[] roots;
-	private FileSource currentDir;
+	// set lazily, possibly from several threads
+	private volatile FileSource[] roots;
+	private volatile FileSource currentDir;
 
 	/**
 	 * Bytes per random-access read or write. Each chunk is one round trip, so
@@ -301,6 +320,35 @@ public class SftpFileSourceFactory extends FileSourceFactory {
 		this.connectTimeout = connectTimeout;
 	}
 
+	public int getMaxChannels() {
+		return maxChannels;
+	}
+
+	/**
+	 * Most channels open at once on the shared connection (see
+	 * PROP_MAX_CHANNELS). Takes effect when a new connection is made.
+	 *
+	 * @throws IllegalArgumentException if less than 1
+	 */
+	public void setMaxChannels(int maxChannels) {
+		if( maxChannels < 1 ) {
+			throw new IllegalArgumentException("maxChannels must be at least 1, not "+maxChannels);
+		}
+		this.maxChannels = maxChannels;
+	}
+
+	public long getChannelWaitTimeout() {
+		return channelWaitTimeout;
+	}
+
+	/**
+	 * Milliseconds to wait for a free channel (see PROP_CHANNEL_WAIT_TIMEOUT).
+	 * Takes effect when a new connection is made.
+	 */
+	public void setChannelWaitTimeout(long channelWaitTimeout) {
+		this.channelWaitTimeout = channelWaitTimeout;
+	}
+
 	public int getServerAliveInterval() {
 		return serverAliveInterval;
 	}
@@ -371,70 +419,82 @@ public class SftpFileSourceFactory extends FileSourceFactory {
 		return implementation != null ? implementation : SshProviders.defaultName();
 	}
 
+	/** The shared connection, connecting first if needed. */
+	private SharedSession session() throws IOException {
+		SharedSession s = shared;
+		if( s == null || !s.connection.isConnected()) {
+			connect();
+			s = shared;
+			if( s == null ) {
+				throw new IOException("Not connected to "+getUser()+"@"+getHost()+":"+getPort());
+			}
+		}
+		return s;
+	}
+
 	/** The SSH connection this factory uses, connecting first if needed. */
 	SshConnection getConnection() throws IOException {
-		if( !isConnected()) {
-			connect();
-		}
-		synchronized (this) {
-			return shared.connection;
-		}
+		return session().connection;
 	}
 
 	/**
 	 * An SFTP channel for one stream or file, from the shared connection's
-	 * pool of idle channels when there is one. Closing it gives it back to
-	 * the pool (see PooledSftpChannel). Connects first if needed.
+	 * pool. Closing it gives it back to the pool (see PooledSftpChannel).
+	 * Connects first if needed; waits if all channels are in use.
 	 */
 	SftpChannel openSftp() throws IOException {
-		return channelPool().borrow();
+		return channelPool().borrow(SftpChannelPool.Use.STREAM);
 	}
 
 	/** The shared connection's channel pool, connecting first if needed. */
 	SftpChannelPool channelPool() throws IOException {
-		if( !isConnected()) {
-			connect();
-		}
-		synchronized (this) {
-			return shared.pool;
-		}
+		return session().pool;
 	}
 
 	/**
-	 * Runs one SFTP call on this factory's channel, holding the factory's lock
-	 * so calls from different threads can't interleave on the channel.
-	 * Reconnects first if the channel or connection has closed.
+	 * Runs one SFTP call on a channel borrowed from the shared connection's
+	 * pool, given back when the call returns. Calls from different threads
+	 * run at the same time, each on its own channel. (They used to share the
+	 * factory's one channel, one at a time.) Connects first if needed.
+	 * <p>
+	 * 'op' should make its requests and return: a stream or file it opens on
+	 * the channel stops working when it returns. Use the FileSource streams.
 	 */
-	public synchronized <T> T sftp(SftpOperation<T> op) throws IOException {
-		if( !isConnected()) {
-			connect();
+	public <T> T sftp(SftpOperation<T> op) throws IOException {
+		try (SftpChannel c = channelPool().borrow(SftpChannelPool.Use.CALL)) {
+			return op.run(c);
 		}
-		return op.run(sftp);
 	}
 
 	/**
 	 * Like sftp(), for calls that only read (stat, list, readlink, ...): if
-	 * the call fails because the channel or connection died during it, this
-	 * reconnects and tries once more. A missing file, a refused permission or
-	 * any other answer from a server that's still connected isn't retried.
-	 * Changes (mkdir, rename, ...) aren't retried either: the first attempt
-	 * may have happened before the connection dropped.
+	 * the call fails because its channel or the connection died during it,
+	 * this tries once more on another channel, reconnecting if needed. A
+	 * missing file, a refused permission or any other answer from the server
+	 * isn't retried. Changes (mkdir, rename, ...) aren't retried either: the
+	 * first attempt may have happened before the connection dropped.
 	 */
-	synchronized <T> T sftpReadOnly(SftpOperation<T> op) throws IOException {
-		try {
-			return sftp(op);
-		} catch (NoSuchFileException | AccessDeniedException e) {
-			throw e;
-		} catch (IOException e) {
-			if( isConnected()) {
-				throw e;   // the server answered; trying again won't change that
-			}
-			logDebug("Connection lost during an SFTP call, reconnecting: "+e);
+	<T> T sftpReadOnly(SftpOperation<T> op) throws IOException {
+		IOException first = null;
+		for (int attempt = 0; ; attempt++) {
+			SftpChannel c = channelPool().borrow(SftpChannelPool.Use.CALL);
 			try {
-				return sftp(op);
-			} catch (IOException | RuntimeException e2) {
-				e2.addSuppressed(e);
-				throw e2;
+				return op.run(c);
+			} catch (NoSuchFileException | AccessDeniedException e) {
+				throw e;
+			} catch (IOException e) {
+				// checked before close(), which gives a failed channel back closed
+				boolean lost = !c.isOpen() || !isConnected();
+				if( !lost || attempt > 0 ) {
+					if( first != null ) {
+						e.addSuppressed(first);
+					}
+					throw e;   // the server answered, or it failed twice
+				}
+				logDebug("SFTP channel lost during a call, trying again: "+e);
+				first = e;
+			} finally {
+				c.close();
 			}
 		}
 	}
@@ -479,8 +539,9 @@ public class SftpFileSourceFactory extends FileSourceFactory {
 	}
 
 	@Override
-	public synchronized boolean isConnected() {
-		return shared != null && shared.connection.isConnected() && sftp != null && sftp.isOpen();
+	public boolean isConnected() {
+		SharedSession s = shared;
+		return s != null && s.connection.isConnected();
 	}
 
 	/**
@@ -519,15 +580,19 @@ public class SftpFileSourceFactory extends FileSourceFactory {
 		if( isConnected()) {
 			return true;
 		}
-		if( shared == null || !shared.connection.isConnected()) {
-			// no connection yet, or ours has died: drop it and get a live one
+		// no connection yet, or ours has died: drop it and get a live one
+		releaseSession();
+		SharedSession s = acquireSession();
+		try {
+			// Check that SFTP works now, not on first use; the channel stays
+			// in the pool for that first use.
+			s.pool.borrow(SftpChannelPool.Use.CALL).close();
+		} catch (IOException | RuntimeException e) {
+			shared = s;
 			releaseSession();
-			shared = acquireSession();
+			throw e;
 		}
-		if( sftp != null ) {
-			sftp.close();
-		}
-		sftp = shared.connection.openSftp();
+		shared = s;
 		return true;
 	}
 
@@ -579,7 +644,7 @@ public class SftpFileSourceFactory extends FileSourceFactory {
 		try {
 			SshProvider provider = SshProviders.get(getEffectiveImplementation());
 			logDebug("Connecting to "+getUser()+"@"+getHost()+":"+getPort()+" with "+provider.getName());
-			s = new SharedSession(key, provider.connect(settings()));   // refs = 1: this factory's
+			s = new SharedSession(key, provider.connect(settings()), maxChannels, channelWaitTimeout);   // refs = 1: this factory's
 		} catch (IOException | RuntimeException | Error e) {
 			synchronized (sessions) {
 				connecting.remove(key);
@@ -669,18 +734,14 @@ public class SftpFileSourceFactory extends FileSourceFactory {
 
 	@Override
 	protected synchronized void disConnectImpl() {
-		if( sftp != null ) {
-			sftp.close();
-			sftp = null;
-		}
 		// safe to call twice: the second call finds shared == null
 		releaseSession();
 	}
 
 	@Override
 	public FileSourceFactory createThreadSafeCopy() {
-		// The copy shares the SSH connection (same key) but opens its own SFTP
-		// channel, so it can be used from another thread.
+		// The copy shares the SSH connection (same key) and its channels. (Every
+		// factory can be used from several threads now; copies are still made.)
 		SftpFileSourceFactory ret = new SftpFileSourceFactory();
 		ret.host = host;
 		ret.user = user;
@@ -696,6 +757,8 @@ public class SftpFileSourceFactory extends FileSourceFactory {
 		ret.implementation = implementation;
 		ret.attributeCacheTtl = attributeCacheTtl;
 		ret.chunkSize = chunkSize;
+		ret.maxChannels = maxChannels;
+		ret.channelWaitTimeout = channelWaitTimeout;
 
 		return ret;
 	}
@@ -745,6 +808,8 @@ public class SftpFileSourceFactory extends FileSourceFactory {
 		ret.setProperty(PROP_SERVER_ALIVE_INTERVAL, ""+serverAliveInterval);
 		ret.setProperty(PROP_IMPLEMENTATION, implementation == null ? "":implementation);
 		ret.setProperty(PROP_ATTRIBUTE_CACHE_TTL, ""+attributeCacheTtl);
+		ret.setProperty(PROP_MAX_CHANNELS, ""+maxChannels);
+		ret.setProperty(PROP_CHANNEL_WAIT_TIMEOUT, ""+channelWaitTimeout);
 
 		return ret;
 	}
@@ -826,6 +891,12 @@ public class SftpFileSourceFactory extends FileSourceFactory {
 			String key = p.getProperty(PROP_PRIVATE_KEY);
 			privateKey = key == null || key.isEmpty() ? null : key.getBytes(StandardCharsets.UTF_8);
 		}
+		// getConnectProperties() writes the session key, but it used to be
+		// ignored here, so a key set through properties never took effect
+		if( p.containsKey(PROP_SESSION_KEY)) {
+			String key = p.getProperty(PROP_SESSION_KEY);
+			sessionKey = key == null || key.isEmpty() ? null : key;
+		}
 		String kh = p.getProperty(PROP_KNOWN_HOSTS, knownHosts);
 		knownHosts = kh == null || kh.isEmpty() ? null : kh;
 		setStrictHostKeyChecking(p.getProperty(PROP_STRICT_HOST_KEY_CHECKING, strictHostKeyChecking));
@@ -835,6 +906,14 @@ public class SftpFileSourceFactory extends FileSourceFactory {
 		String ttl = p.getProperty(PROP_ATTRIBUTE_CACHE_TTL);
 		if( ttl != null && !ttl.trim().isEmpty()) {
 			setAttributeCacheTtl(Long.parseLong(ttl.trim()));
+		}
+		String max = p.getProperty(PROP_MAX_CHANNELS);
+		if( max != null && !max.trim().isEmpty()) {
+			setMaxChannels(Integer.parseInt(max.trim()));
+		}
+		String wait = p.getProperty(PROP_CHANNEL_WAIT_TIMEOUT);
+		if( wait != null && !wait.trim().isEmpty()) {
+			setChannelWaitTimeout(Long.parseLong(wait.trim()));
 		}
 	}
 
@@ -947,7 +1026,7 @@ public class SftpFileSourceFactory extends FileSourceFactory {
 	}
 
 
-	FileSourceUser remotePrinciple;
+	volatile FileSourceUser remotePrinciple;
 
 	/**
 	 * The remote user, with uid and groups, from running "id" on the server.
@@ -1021,7 +1100,15 @@ public class SftpFileSourceFactory extends FileSourceFactory {
 
 	/** Like runCommand(command), waiting at most 'timeoutMs' for it to finish. */
 	public String runCommand(String command, long timeoutMs) throws IOException {
-		SshConnection.ExecResult r = getConnection().exec(command, timeoutMs);
+		SharedSession s = session();
+		// the server counts command channels against the same limit as SFTP ones
+		Runnable slot = s.pool.reserveSlot();
+		SshConnection.ExecResult r;
+		try {
+			r = s.connection.exec(command, timeoutMs);
+		} finally {
+			slot.run();
+		}
 		String output = r.stdout + r.stderr;
 		if( r.exitStatus != 0) {
 			throw new IOException("status="+r.exitStatus+" ("+output+")");

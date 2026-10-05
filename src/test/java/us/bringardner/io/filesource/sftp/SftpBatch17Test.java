@@ -9,7 +9,6 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.io.IOException;
 import java.io.InputStream;
-import java.lang.reflect.Field;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Proxy;
 import java.nio.file.NoSuchFileException;
@@ -333,13 +332,13 @@ public class SftpBatch17Test {
 	// ------------------------------------------------------------ #6 retry
 
 	/**
-	 * Replaces the factory's own channel with one whose first call to
-	 * 'method' closes the real channel and fails, as when it drops mid-call.
+	 * Makes the next channel the factory's pool hands out one whose first
+	 * call to 'method' closes the real channel and fails, as when it drops
+	 * mid-call. (Batch 19: calls borrow from the pool; they used to use the
+	 * factory's own channel, which this replaced.)
 	 */
 	static void breakChannelOn(SftpFileSourceFactory f, String method) throws Exception {
-		Field field = SftpFileSourceFactory.class.getDeclaredField("sftp");
-		field.setAccessible(true);
-		SftpChannel real = (SftpChannel) field.get(f);
+		SftpChannel real = f.getConnection().openSftp();
 		AtomicBoolean failed = new AtomicBoolean();
 		Object broken = Proxy.newProxyInstance(SftpChannel.class.getClassLoader(), new Class<?>[] {SftpChannel.class},
 				(proxy, m, args) -> {
@@ -356,7 +355,7 @@ public class SftpBatch17Test {
 						throw e.getCause();
 					}
 				});
-		field.set(f, broken);
+		f.channelPool().addIdleForTest((SftpChannel) broken);
 	}
 
 	/** A read-only call whose channel drops is tried again on a new channel. */

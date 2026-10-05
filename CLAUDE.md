@@ -20,7 +20,7 @@ BjlFileSystemFtp, BjlFileSystemJdbc. They live next to this repo in
 
 ## Building and testing
 
-- `mvn package` runs the whole suite. At batch 18 that was 194 tests.
+- `mvn package` runs the whole suite. At batch 19 that was 212 tests.
 - `TestServer` picks the server once per run, by `-Dbjl.sftp.test.server`:
   - `auto` (the default) uses OpenSSH on **localhost:22** if `unittest1` /
     `0000` can log in, otherwise the embedded server.
@@ -33,9 +33,11 @@ BjlFileSystemFtp, BjlFileSystemJdbc. They live next to this repo in
 - Tests that need OpenSSH call `TestServer.assumeOpenSsh()`: links, Unix
   permissions, permission denied, the remote user, shell commands, the other
   accounts and the 10-channel limit. On the embedded server they're skipped
-  (24 of them at batch 15). On Tony's machine `auto` picks OpenSSH, so every
+  (32 of them at batch 19). On Tony's machine `auto` picks OpenSSH, so every
   test runs.
-- New tests connect with `TestServer.connect(impl)`.
+- New tests connect with `TestServer.connect(impl)`. A test that needs a
+  connection of its own (its own pool and limits) sets a unique `sessionKey`
+  property; before batch 19 that property was silently ignored.
 - `TestSftpRandomAccessIoController` (port 2222) and `SftpCanonicalPathTest`
   (port 2224) start their own embedded servers.
 - Pick the SSH library for a run with `-Dbjl.sftp.implementation=jsch` (the
@@ -45,15 +47,17 @@ BjlFileSystemFtp, BjlFileSystemJdbc. They live next to this repo in
 
 ## How the code is laid out
 
-- `SftpFileSourceFactory`: connection settings, shared SSH sessions and the
-  factory's own SFTP channel. Use the channel only through `sftp(op)`, which
-  holds the factory's lock.
+- `SftpFileSourceFactory`: connection settings and shared SSH sessions. A
+  factory has no channel of its own (since batch 19): `sftp(op)` borrows one
+  from the shared pool for each call, so calls from different threads run
+  at the same time. `op` must not let a stream or file it opens escape.
   - Sessions are shared between factories with the same user, host, port,
     credentials and library. The key includes a hash of the credentials. The
     reference count starts at 1.
   - Connection properties: `host`, `port`, `user`, `password`, `identityFile`,
     `privateKey`, `implementation`, `strictHostKeyChecking`, `knownHosts`,
-    `connectTimeout`, `serverAliveInterval` and `attributeCacheTtl`. A property
+    `connectTimeout`, `serverAliveInterval`, `attributeCacheTtl`,
+    `sessionKey`, `maxChannels` and `channelWaitTimeout`. A property
     that isn't given leaves the current setting alone; an empty one clears it.
 - `SftpFileSource`: one remote path.
   - Directory listings are never cached.
@@ -65,9 +69,12 @@ BjlFileSystemFtp, BjlFileSystemJdbc. They live next to this repo in
   in chunks (`getChunkSize()`, 128 KB since batch 17). Each borrows its own SFTP channel.
 - Streams, random-access files and seekable streams get their channel from
   `factory.openSftp()`, not `getConnection().openSftp()`. It borrows from the
-  shared session's `SftpChannelPool` (at most 4 idle). The channel comes back
-  as a `PooledSftpChannel`, and closing it returns it to the pool only if no
-  call on it threw and every stream or file opened on it was closed.
+  shared session's `SftpChannelPool` (`Use.STREAM`; calls use `Use.CALL`).
+  The pool keeps at most 4 idle and at most `maxChannels` open (see batch
+  19). The channel comes back as a `PooledSftpChannel`, and closing it
+  returns it to the pool only if nothing on it failed and every stream or
+  file opened on it was closed. `NoSuchFileException` and
+  `AccessDeniedException` from a call don't count as failing.
 - `client/`: the interface that hides the SSH library. It has `SshProvider`,
   `SshProviders`, `SshConnection`, `SftpChannel`, `SftpFile`,
   `SftpAttributes`, `SftpEntry` and `SshSettings`.
@@ -104,23 +111,9 @@ The full review is in the claude.ai project "FileSystem", in
   embedded server (see Building and testing).
 - **Batch 16 is merged** (below).
 - **Batch 17 is merged** (below).
-- **Batch 18 is on its branch, not merged yet** (below).
-- **Next: batch 19** (planned with Tony, not started): metadata calls
-  borrow pooled channels instead of each factory's own, and a channel limit
-  per connection. Decisions:
-  - New connection property `maxChannels`, configurable, default 8
-    (OpenSSH allows 10 per connection). Not part of the session key: the
-    first factory to connect sets it for the shared connection.
-  - A separate property for how long a borrow waits when every channel is
-    in use (not `connectTimeout`); then it fails with a clear message.
-  - Streams, random-access files and seekable streams may use at most
-    `maxChannels - 2`, so metadata calls can't be starved; `runCommand`
-    takes a slot too.
-  - `PooledSftpChannel` must keep a channel after a `NoSuchFileException`
-    or `AccessDeniedException` on a simple call (stat, list, ...), or every
-    `exists()` on a missing file would cost a new channel.
-  - Batch 17's `breakChannelOn` and batch 18's `slowCloseDoesNotHoldUpOthers`
-    use the factory's `sftp` field, which goes away; both need rework.
+- **Batch 18 is merged** (below).
+- **Batch 19 is on its branch, not merged yet** (below). With it, every item
+  from the second review that Tony chose is done.
 - **Deferred:** CI. Tony isn't ready for it. A workflow would have to build
   BjlCore, BjlIo and BjlFileSystem first, because they're unpublished
   SNAPSHOTs. `TestSftpRandomAccessIoController` and `SftpCanonicalPathTest`
@@ -238,3 +231,42 @@ The full review is in the claude.ai project "FileSystem", in
   192.0.2.1 to time out rather than be refused at once; if it's refused, the
   test is skipped. MINA's slow-close test takes about 10 s, because its own
   channel's close must time out first (batch 19 removes that channel).
+
+## Batch 19: calls on pooled channels and a channel limit (`fix/sftp-review-19`)
+
+- The factory's own channel is gone. `sftp(op)` and `sftpReadOnly(op)` borrow
+  from the pool (`Use.CALL`) for each call, without the factory's lock.
+  Before, every call from every thread queued for the factory's one channel,
+  and each factory (and each `createThreadSafeCopy()`) kept that channel
+  open: twelve copies on one connection hit OpenSSH's limit of 10.
+  `isConnected()` now means the shared connection is up. `connectImpl()`
+  borrows and returns one channel, so a server without SFTP still fails at
+  connect. `shared`, `roots`, `currentDir` and `remotePrinciple` are volatile.
+- `sftpReadOnly` retries when its channel was lost (`!c.isOpen()`, checked
+  before close) or the connection dropped.
+- `PooledSftpChannel`: a call's `NoSuchFileException` or
+  `AccessDeniedException` no longer marks the channel failed. They're the
+  server's answer, and `exists()` on a missing file would otherwise cost a
+  new channel each time. Streams and files keep the strict rule.
+- The limit, in `SftpChannelPool`: at most `maxChannels` (connection
+  property, default 8) channels open, busy and idle, plus command slots.
+  `borrow` waits up to `channelWaitTimeout` (default 30 s; 0 fails at once)
+  and then throws an IOException saying the channels are in use. Streams may
+  hold at most `maxChannels - 2` (`RESERVED_FOR_CALLS`), so calls can't be
+  starved. Below 3 there's no reserve. `runCommand` takes a slot with
+  `reserveSlot()`, closing an idle channel if that's what makes room. Both
+  settings come from the factory that creates the connection; they're not
+  in the session key.
+- `JschConnection.exec` retries a refused channel open for up to 1 s, like
+  `openSftp()`: JSch doesn't wait for a close to be confirmed, so the slot
+  just freed may still count on the server.
+- `setConnectionProperties(Properties)` now reads `sessionKey`, which
+  `getConnectProperties()` always wrote. Batch 18's tests set it to get
+  connections of their own and silently didn't; now they do.
+- Tests: `SftpBatch19Test`. `SftpChannelPoolTest.aFailedStreamDoesNotGiveBackItsChannel`
+  became `aRefusedOpenKeepsItsChannel` (the rule changed on purpose).
+  Batch 17's `breakChannelOn` plants a broken channel with
+  `SftpChannelPool.addIdleForTest`. Batch 18's slow-close test waits for
+  `isConnected()` to turn false, and now takes about 10 s less with MINA.
+- Measured through `DelayProxy` (50 ms round trip): 4 threads x 5 stats took
+  22 round trips with calls serialized, 5 now.

@@ -8,7 +8,6 @@ import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import java.io.IOException;
 import java.io.InputStream;
-import java.lang.reflect.Field;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Properties;
@@ -194,6 +193,8 @@ public class SftpBatch18Test {
 	 * Closing a connection whose server has gone silent takes a while (MINA
 	 * waits up to 10 s for each channel's close to be confirmed). That used to
 	 * happen inside the sessions lock, holding up every connect in the JVM.
+	 * (Before batch 19 the factory's own channel was closed first, outside
+	 * the lock, so this test took 10 s longer with MINA.)
 	 */
 	@ParameterizedTest
 	@ValueSource(strings = {"jsch", "mina"})
@@ -215,11 +216,9 @@ public class SftpBatch18Test {
 				}
 			});
 
-			// wait until it has closed its own channel and moved on to the shared connection
-			Field own = SftpFileSourceFactory.class.getDeclaredField("sftp");
-			own.setAccessible(true);
+			// wait until it has let go of the connection and is closing it
 			long deadline = System.currentTimeMillis() + 20_000;
-			while( own.get(closing) != null && System.currentTimeMillis() < deadline ) {
+			while( closing.isConnected() && System.currentTimeMillis() < deadline ) {
 				Thread.sleep(20);
 			}
 			Thread.sleep(300);

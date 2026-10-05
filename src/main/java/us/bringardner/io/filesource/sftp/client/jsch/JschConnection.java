@@ -84,14 +84,35 @@ class JschConnection implements SshConnection {
 	public ExecResult exec(String command, long commandTimeoutMs) throws IOException {
 		ChannelExec exec = null;
 		try {
-			exec = (ChannelExec) session.openChannel("exec");
-			exec.setCommand(command);
 			// JSch writes stderr into this buffer itself, so a command that
 			// fills stderr can't block while stdout is being read.
 			ByteArrayOutputStream err = new ByteArrayOutputStream();
-			exec.setErrStream(err, true);
-			InputStream stdOut = exec.getInputStream();
-			exec.connect(timeoutMs);
+			InputStream stdOut;
+			// Like openSftp(), retry a refused open for up to REFUSED_RETRY_MS: a
+			// channel closed just before (say, to make room for this command)
+			// may still count against the server's limit.
+			long giveUp = System.currentTimeMillis() + REFUSED_RETRY_MS;
+			long pause = 5;
+			while( true ) {
+				exec = (ChannelExec) session.openChannel("exec");
+				exec.setCommand(command);
+				exec.setErrStream(err, true);
+				stdOut = exec.getInputStream();
+				try {
+					exec.connect(timeoutMs);
+					break;
+				} catch (JSchException e) {
+					// a refusal leaves the server's reason code (1-4) as the exit status
+					boolean refused = exec.getExitStatus() > 0 && session.isConnected();
+					exec.disconnect();
+					exec = null;
+					if( !refused || System.currentTimeMillis() + pause > giveUp ) {
+						throw e;
+					}
+				}
+				Thread.sleep(pause);
+				pause = Math.min(pause * 2, 100);
+			}
 
 			// The time limit is enforced by closing the channel, which ends the
 			// read below. Reading until EOF used to come first, with no limit,

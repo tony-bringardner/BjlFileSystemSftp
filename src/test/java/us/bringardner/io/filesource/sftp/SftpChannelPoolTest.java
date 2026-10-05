@@ -217,10 +217,10 @@ public class SftpChannelPoolTest {
 	@ValueSource(strings = {"jsch", "mina"})
 	void closeThenOpenAtTheChannelLimit(String impl) throws IOException {
 		TestServer.assumeOpenSsh();
-		// OpenSSH's default limit is 10: the factory's own channel, the idle
-		// ones in the pool, and these
+		// OpenSSH's default limit is 10: the pool's channels and these
+		// (opened past the pool, so its limit doesn't apply)
 		SftpFileSourceFactory f = factory(impl);
-		int room = 9 - f.channelPool().idleChannels().size();
+		int room = 10 - f.channelPool().openCount();
 		List<SftpChannel> held = new ArrayList<>();
 		try {
 			for (int i = 0; i < room; i++) {
@@ -284,7 +284,12 @@ public class SftpChannelPoolTest {
 
 	@ParameterizedTest
 	@ValueSource(strings = {"jsch", "mina"})
-	void aFailedStreamDoesNotGiveBackItsChannel(String impl) throws IOException {
+	void aRefusedOpenKeepsItsChannel(String impl) throws IOException {
+		// Batch 19: "permission denied" and "no such file" are the server's
+		// answer to the open, so nothing is left pending and the channel goes
+		// back to the pool. (Before, any exception closed it; with calls on
+		// pooled channels too, every exists() on a missing file would then
+		// have cost a new channel.)
 		TestServer.assumeOpenSsh();
 		SftpFileSourceFactory f = factory(impl);
 		FileSource locked = file(f, "locked.txt");
@@ -297,21 +302,22 @@ public class SftpChannelPoolTest {
 			read(file(f, "ok.txt"), "warm up");
 			List<SftpChannel> before = pool.idleChannels();
 			assertFalse(before.isEmpty());
+			int opened = pool.openedCount();
 
 			assertThrows(FileNotFoundException.class, locked::getInputStream, "permission denied");
-			List<SftpChannel> after = pool.idleChannels();
-			assertEquals(before.size() - 1, after.size(), "the channel it used isn't back");
-			SftpChannel used = before.get(0);   // borrow() takes the most recent
-			assertFalse(after.contains(used));
-			assertFalse(used.isOpen(), "and it's closed");
-
 			assertThrows(FileNotFoundException.class, () -> missing.getRandomAccessStream("r"));
 			assertThrows(FileNotFoundException.class, missing::getSeekableInputStream);
-			assertEquals(Math.max(0, after.size() - 2), pool.idleChannels().size());
+			assertThrows(FileNotFoundException.class, missing::getInputStream);
+
+			assertEquals(before.size(), pool.idleChannels().size(), "every channel is back");
+			assertTrue(pool.idleChannels().contains(before.get(0)), "the one they used too");
+			assertTrue(before.get(0).isOpen());
+			assertEquals(opened, pool.openedCount(), "no new channels");
 		} finally {
 			f.sftp(c -> { c.chmod(locked.getAbsolutePath(), 0644); return null; });
 		}
 	}
+
 
 	/** Writes and reads back a small file, which leaves a channel in the pool. */
 	static void read(FileSource f, String text) throws IOException {

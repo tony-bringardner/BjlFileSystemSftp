@@ -5,6 +5,8 @@ import java.io.FilterOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.nio.file.AccessDeniedException;
+import java.nio.file.NoSuchFileException;
 import java.util.List;
 
 import us.bringardner.io.filesource.sftp.client.SftpAttributes;
@@ -14,27 +16,32 @@ import us.bringardner.io.filesource.sftp.client.SftpFile;
 
 /**
  * A channel borrowed from an {@link SftpChannelPool}. close() gives it back
- * to the pool, but only if it's still open, no call on it (or on a stream or
- * file opened through it) threw, and every stream and file opened through it
- * has been closed. Otherwise close() closes the channel, since it may hold
- * unanswered requests or an open handle.
+ * to the pool, but only if it's still open, nothing on it failed, and every
+ * stream and file opened through it has been closed. Otherwise close()
+ * closes the channel, since it may hold unanswered requests or an open handle.
  * <p>
- * Any exception counts, even a missing file: a channel is cheap to replace
- * and a confused one isn't. After close() this object can't be used, since
- * the channel may already belong to someone else.
+ * What counts as failed: any exception from a stream or file opened through
+ * it, and any exception from a call except NoSuchFileException and
+ * AccessDeniedException. Those two are the server's answer to the request,
+ * so nothing is left pending; and they're common (exists() on a missing
+ * file), so closing the channel for them would cost a new channel each time.
+ * After close() this object can't be used, since the channel may already
+ * belong to someone else.
  */
 class PooledSftpChannel implements SftpChannel {
 
 	private final SftpChannelPool pool;
 	private final SftpChannel channel;
+	private final SftpChannelPool.Use use;
 	/** Streams and files opened through this and not closed yet. */
 	private int openHandles;
 	private boolean failed;
 	private boolean closed;
 
-	PooledSftpChannel(SftpChannelPool pool, SftpChannel channel) {
+	PooledSftpChannel(SftpChannelPool pool, SftpChannel channel, SftpChannelPool.Use use) {
 		this.pool = pool;
 		this.channel = channel;
+		this.use = use;
 	}
 
 	private interface Call<T> {
@@ -49,6 +56,8 @@ class PooledSftpChannel implements SftpChannel {
 		}
 		try {
 			return c.run();
+		} catch (NoSuchFileException | AccessDeniedException e) {
+			throw e;   // the server's answer; the channel is fine (see the class comment)
 		} catch (IOException | RuntimeException e) {
 			fail();
 			throw e;
@@ -194,7 +203,7 @@ class PooledSftpChannel implements SftpChannel {
 			closed = true;
 			reusable = !failed && openHandles == 0;
 		}
-		pool.giveBack(channel, reusable);
+		pool.giveBack(channel, reusable, use);
 	}
 
 	/** Counts the stream as closed once, and marks the channel failed if it throws. */
