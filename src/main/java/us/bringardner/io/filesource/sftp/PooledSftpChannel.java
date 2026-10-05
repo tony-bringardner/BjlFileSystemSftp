@@ -132,6 +132,11 @@ class PooledSftpChannel implements SftpChannel {
 	}
 
 	@Override
+	public void replace(String from, String to) throws IOException {
+		call(() -> { channel.replace(from, to); return null; });
+	}
+
+	@Override
 	public void chmod(String path, int mode) throws IOException {
 		call(() -> { channel.chmod(path, mode); return null; });
 	}

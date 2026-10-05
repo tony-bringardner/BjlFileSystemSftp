@@ -68,20 +68,61 @@ public class SftpFileSource extends BaseObject implements FileSource {
 		/** Each stream has its own SFTP channel, so streams can be used from any thread. */
 		private final SftpChannel mySftp;
 		private final OutputStream out;
+		/**
+		 * With the factory's safeOverwrite: the temporary file the data goes to,
+		 * and the file close() puts it in place of. Otherwise both are null.
+		 */
+		private final String tempPath;
+		private final String targetPath;
 
 		SftpOutputStream (boolean append) throws IOException {
 			attr = null;
 			exists = null;
 
 			mySftp = factory.openSftp();
+			String temp = null;
+			String target = null;
 			try {
-				this.out = mySftp.write(path, append);
+				if( !append && factory.isSafeOverwrite()) {
+					target = replaceTarget();
+					temp = tempPathFor(target);
+					this.out = mySftp.write(temp, false);
+				} else {
+					this.out = mySftp.write(path, append);
+				}
 			} catch (IOException | RuntimeException e) {
 				// don't leak the channel when the open fails
 				mySftp.close();
 				throw e;
 			}
+			tempPath = temp;
+			targetPath = target;
+		}
 
+		/** The file to replace: this one, or the one a symbolic link here points to. */
+		private String replaceTarget() throws IOException {
+			try {
+				if( mySftp.lstat(path).isLink()) {
+					return getCanonicalPath();   // replace what it points to, and keep the link
+				}
+			} catch (NoSuchFileException e) {
+				// a new file
+			}
+			return path;
+		}
+
+		/** Puts the temporary file in place of the target, keeping the target's permission bits. */
+		private void putInPlace() throws IOException {
+			int mode = -1;
+			try {
+				mode = mySftp.stat(targetPath).getPermissions() & 07777;
+			} catch (NoSuchFileException e) {
+				// no old file: the new one keeps the server's default permissions
+			}
+			if( mode >= 0 ) {
+				mySftp.chmod(tempPath, mode);
+			}
+			mySftp.replace(tempPath, targetPath);
 		}
 		@Override
 		public void write(int b) throws IOException {
@@ -103,6 +144,21 @@ public class SftpFileSource extends BaseObject implements FileSource {
 			closed = true;
 			try {
 				out.close();
+				if( tempPath != null ) {
+					putInPlace();
+				}
+			} catch (IOException | RuntimeException e) {
+				if( tempPath != null ) {
+					// the old file is untouched; don't leave the half-written copy
+					try {
+						factory.sftp(c -> { c.remove(tempPath); return null; });
+					} catch (NoSuchFileException e2) {
+						// already gone
+					} catch (IOException | RuntimeException e2) {
+						e.addSuppressed(e2);
+					}
+				}
+				throw e;
 			} finally {
 				mySftp.close();
 				clearAttr();
@@ -667,6 +723,17 @@ public class SftpFileSource extends BaseObject implements FileSource {
 		return canonicalize(factory, abs);
 	}
 
+	/**
+	 * A name for a temporary file beside 'target': ".name.random.tmp" in the
+	 * same directory, so renaming it over the target stays on one file system.
+	 */
+	static String tempPathFor(String target) {
+		int slash = target.lastIndexOf('/');
+		String dir = slash < 0 ? "" : target.substring(0, slash + 1);
+		String name = target.substring(slash + 1);
+		return dir+"."+name+"."+Long.toHexString(java.util.concurrent.ThreadLocalRandom.current().nextLong() & Long.MAX_VALUE)+".tmp";
+	}
+
 	/** As in POSIX (SYMLOOP_MAX / Linux ELOOP). */
 	static final int MAX_LINKS = 40;
 
@@ -837,21 +904,31 @@ public class SftpFileSource extends BaseObject implements FileSource {
 		return ret;
 	}
 
+	/**
+	 * Makes this directory and any missing parents. True if it's a directory
+	 * at the end, including when it already was; false if a file is in the
+	 * way (it used to say true then). If another program makes one of the
+	 * directories meanwhile, that's success: mkdir used to fail on it with an
+	 * IOException, which a cached exists() made likely for up to the cache time.
+	 */
 	@Override
 	public  synchronized boolean mkdirs() throws IOException {
-		boolean ret = exists();
-		if( !ret ) {
-			FileSource p = getParentFile();
-			if( p != null ) {
-				if( p.mkdirs()) {
-					ret = mkdir();
-				}
-			} else {
-				ret = mkdir();
-			}
-
+		if( exists()) {
+			return isDirectory();
 		}
-		return ret;
+		FileSource p = getParentFile();
+		if( p != null && !p.mkdirs()) {
+			return false;
+		}
+		try {
+			return mkdir();
+		} catch (IOException e) {
+			clearAttr();
+			if( isDirectory()) {
+				return true;   // made by someone else since exists() was answered
+			}
+			throw e;
+		}
 	}
 
 	@Override

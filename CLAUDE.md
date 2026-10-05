@@ -20,7 +20,7 @@ BjlFileSystemFtp, BjlFileSystemJdbc. They live next to this repo in
 
 ## Building and testing
 
-- `mvn package` runs the whole suite. At batch 20 that was 218 tests.
+- `mvn package` runs the whole suite. At batch 21 that was 244 tests.
 - `TestServer` picks the server once per run, by `-Dbjl.sftp.test.server`:
   - `auto` (the default) uses OpenSSH on **localhost:22** if `unittest1` /
     `0000` can log in, otherwise the embedded server.
@@ -33,7 +33,7 @@ BjlFileSystemFtp, BjlFileSystemJdbc. They live next to this repo in
 - Tests that need OpenSSH call `TestServer.assumeOpenSsh()`: links, Unix
   permissions, permission denied, the remote user, shell commands, the other
   accounts and the 10-channel limit. On the embedded server they're skipped
-  (32 of them at batch 19). On Tony's machine `auto` picks OpenSSH, so every
+  (36 of them at batch 21). On Tony's machine `auto` picks OpenSSH, so every
   test runs.
 - New tests connect with `TestServer.connect(impl)`. A test that needs a
   connection of its own (its own pool and limits) sets a unique `sessionKey`
@@ -57,7 +57,7 @@ BjlFileSystemFtp, BjlFileSystemJdbc. They live next to this repo in
   - Connection properties: `host`, `port`, `user`, `password`, `identityFile`,
     `privateKey`, `implementation`, `strictHostKeyChecking`, `knownHosts`,
     `connectTimeout`, `serverAliveInterval`, `attributeCacheTtl`,
-    `sessionKey`, `maxChannels` and `channelWaitTimeout`. A property
+    `sessionKey`, `maxChannels`, `channelWaitTimeout` and `safeOverwrite`. A property
     that isn't given leaves the current setting alone; an empty one clears it.
 - `SftpFileSource`: one remote path.
   - Directory listings are never cached.
@@ -115,11 +115,9 @@ The full review is in the claude.ai project "FileSystem", in
 - **Batch 17 is merged** (below).
 - **Batch 18 is merged** (below).
 - **Batch 19 is merged** (below).
-- **Batch 20 is on its branch, not merged yet** (below).
-- **Still optional, Tony's call:** #9 safe uploads (temporary file, then
-  rename; would be opt-in), #11 small races (`mkdirs()` when another program
-  creates the directory at the same time; factories dropped without
-  `disConnect()` keep their connection), #18 one MINA `SshClient` for all
+- **Batch 20 is merged** (below).
+- **Batch 21 is on its branch, not merged yet** (below).
+- **Still optional, Tony's call:** #18 one MINA `SshClient` for all
   connections, and `strictHostKeyChecking` defaulting to "no".
 - **Deferred:** CI. Tony isn't ready for it. A workflow would have to build
   BjlCore, BjlIo and BjlFileSystem first, because they're unpublished
@@ -302,3 +300,36 @@ The full review is in the claude.ai project "FileSystem", in
   the server. Through JSch it fails on every run, usually on the first
   write. Also: the MINA connection is made only for writing, is
   disconnected with the factory, and gets its own key.
+
+
+## Batch 21: mkdirs races, dropped factories, safe overwrite (`fix/sftp-review-21`)
+
+- `mkdirs()`: if `mkdir` fails, it asks again and succeeds when the
+  directory is there now (another program made it, or `exists()` answered
+  "missing" from the cache). It used to throw. A file in the way is now
+  `false`, like `java.io.File`; it used to be `true`.
+- Dropped factories: the factory's connection lives in a `SessionLink`
+  registered with a `Cleaner` (one daemon thread). When a factory is
+  garbage collected without `disConnect()`, the Cleaner releases its share
+  of the connection, and the last share closes it. It used to stay open
+  until the JVM exited. The base class's session registry holds factories
+  weakly, so it doesn't keep them alive.
+- Serialization: `FileSourceFactory` is `Serializable`. Batch 20's lock (a
+  plain `Object`) broke that for SFTP factories; it's a `SerializableLock`
+  now. The connection is `transient`, so a connected factory serializes and
+  comes back disconnected. `readObject` registers the copy with the Cleaner.
+- `safeOverwrite` (connection property, default false): a replacing output
+  stream writes `.name.<random>.tmp` beside the target and, on a clean
+  `close()`, copies the target's permission bits to it and renames it over
+  the target with the new `SftpChannel.replace`. On any failure the
+  temporary file is removed and the target is untouched. Through a symbolic
+  link it replaces the file the link points to. Append ignores it. Needs
+  write permission on the directory; owner, group and hard links aren't
+  kept; a stream never closed leaves its temporary file.
+- `SftpChannel.replace(from, to)`: atomic with OpenSSH's
+  `posix-rename@openssh.com`. JSch's `rename` already uses it when offered;
+  MINA uses `OpenSSHPosixRenameExtension`. Without it, `to` is removed first.
+- `SftpBatch21Test` checks this with both libraries. The dropped-factory
+  test connects in a helper method, so the factory is unreachable once it
+  returns, and waits for the connection to close while calling
+  `System.gc()`.

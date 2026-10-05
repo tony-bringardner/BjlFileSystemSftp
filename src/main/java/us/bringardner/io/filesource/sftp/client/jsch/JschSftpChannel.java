@@ -122,6 +122,28 @@ class JschSftpChannel implements SftpChannel {
 		call(from, () -> { sftp.rename(from, to); return null; });
 	}
 
+	/**
+	 * JSch's rename already uses posix-rename@openssh.com when the server
+	 * offers it, which replaces 'to'. Otherwise a rename onto an existing
+	 * file fails, and 'to' is removed and the rename tried again.
+	 */
+	@Override
+	public void replace(String from, String to) throws IOException {
+		try {
+			rename(from, to);
+		} catch (NoSuchFileException | AccessDeniedException e) {
+			throw e;
+		} catch (IOException e) {
+			try {
+				lstat(to);
+			} catch (NoSuchFileException e2) {
+				throw e;   // 'to' isn't in the way; something else is wrong
+			}
+			remove(to);
+			rename(from, to);
+		}
+	}
+
 	@Override
 	public void chmod(String path, int mode) throws IOException {
 		call(path, () -> { sftp.chmod(mode, path); return null; });

@@ -48,6 +48,14 @@ public interface SftpChannel extends Closeable {
 	/** Renames; fails if 'to' exists. */
 	void rename(String from, String to) throws IOException;
 
+	/**
+	 * Renames 'from' to 'to', replacing 'to' if it exists. Atomic with
+	 * OpenSSH's posix-rename@openssh.com extension: 'to' is the old file or
+	 * the new one, never missing. Without it, 'to' is removed first, so for a
+	 * moment it doesn't exist; it's never a mix of the two.
+	 */
+	void replace(String from, String to) throws IOException;
+
 	/** Sets permission bits (0 to 07777), keeping the owner, times and size. */
 	void chmod(String path, int mode) throws IOException;
 

@@ -17,6 +17,7 @@ import org.apache.sshd.sftp.client.SftpClient.Attributes;
 import org.apache.sshd.sftp.client.SftpClient.CloseableHandle;
 import org.apache.sshd.sftp.client.SftpClient.DirEntry;
 import org.apache.sshd.sftp.client.SftpClient.OpenMode;
+import org.apache.sshd.sftp.client.extensions.openssh.OpenSSHPosixRenameExtension;
 import org.apache.sshd.sftp.client.impl.AbstractSftpClient;
 import org.apache.sshd.sftp.client.impl.SftpInputStreamAsync;
 import org.apache.sshd.sftp.common.SftpConstants;
@@ -139,6 +140,27 @@ class MinaSftpChannel implements SftpChannel {
 	@Override
 	public void rename(String from, String to) throws IOException {
 		call(from, () -> { sftp.rename(from, to); return null; });
+	}
+
+	/**
+	 * MINA's own rename over SFTP v3 can't replace a file, so this uses
+	 * OpenSSH's posix-rename@openssh.com when the server offers it, and
+	 * otherwise removes 'to' first.
+	 */
+	@Override
+	public void replace(String from, String to) throws IOException {
+		OpenSSHPosixRenameExtension posix = sftp.getExtension(OpenSSHPosixRenameExtension.class);
+		if( posix != null && posix.isSupported()) {
+			call(from, () -> { posix.posixRename(from, to); return null; });
+			return;
+		}
+		try {
+			lstat(to);
+			remove(to);
+		} catch (NoSuchFileException e) {
+			// nothing in the way
+		}
+		rename(from, to);
 	}
 
 	@Override

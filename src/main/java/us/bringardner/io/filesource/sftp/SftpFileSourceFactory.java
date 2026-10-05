@@ -38,6 +38,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Properties;
+import java.lang.ref.Cleaner;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutionException;
@@ -111,6 +112,14 @@ public class SftpFileSourceFactory extends FileSourceFactory {
 	 */
 	public static final String PROP_CHANNEL_WAIT_TIMEOUT = "channelWaitTimeout";
 	public static final long DEFAULT_CHANNEL_WAIT_TIMEOUT = 30_000;
+	/**
+	 * "true": getOutputStream() without append writes to a temporary file
+	 * beside the target and puts it in place when the stream is closed, so a
+	 * failed or interrupted write leaves the old file as it was. Default
+	 * "false": the target is emptied and written in place. See
+	 * setSafeOverwrite for what changes.
+	 */
+	public static final String PROP_SAFE_OVERWRITE = "safeOverwrite";
 
 	/**
 	 * This code was taken from sun.nio.fs.UnixFileModeAttribute
@@ -195,13 +204,45 @@ public class SftpFileSourceFactory extends FileSourceFactory {
 	private volatile long attributeCacheTtl = defaultAttributeCacheTtl();
 	private int maxChannels = DEFAULT_MAX_CHANNELS;
 	private long channelWaitTimeout = DEFAULT_CHANNEL_WAIT_TIMEOUT;
+	private volatile boolean safeOverwrite;
 
 	/**
-	 * The shared connection this factory holds a reference to, or null.
-	 * Changed only by connectImpl/disConnectImpl (which lock the factory);
-	 * volatile so the rest can read it without the lock.
+	 * Holds the shared connection a factory has a reference to, apart from
+	 * the factory, so that when a factory is garbage collected without
+	 * disConnect() a Cleaner can still let go of the connection. (It used to
+	 * stay open, with its reference count never reaching 0, until the JVM
+	 * exited.) The connection isn't serialized: a deserialized factory starts
+	 * disconnected.
 	 */
-	private volatile SharedSession shared;
+	private static final class SessionLink implements Runnable, java.io.Serializable {
+		private static final long serialVersionUID = 1L;
+		/**
+		 * The shared connection, or null. Changed only by connectImpl and
+		 * disConnectImpl (which lock the factory) and the Cleaner (once the
+		 * factory is unreachable); volatile so the rest can read it without the lock.
+		 */
+		transient volatile SharedSession session;
+
+		/** The Cleaner's action: the factory is gone, so let go of its connection. */
+		@Override
+		public void run() {
+			releaseSession(this);
+		}
+	}
+
+	/** Lets go of the connections of factories that were never disconnected; one daemon thread. */
+	private static final Cleaner CLEANER = Cleaner.create();
+
+	private final SessionLink link = new SessionLink();
+	{
+		CLEANER.register(this, link);
+	}
+
+	/** A deserialized factory needs its own Cleaner registration; constructors and initializers don't run. */
+	private void readObject(java.io.ObjectInputStream in) throws IOException, ClassNotFoundException {
+		in.defaultReadObject();
+		CLEANER.register(this, link);
+	}
 
 	// set lazily, possibly from several threads
 	private volatile FileSource[] roots;
@@ -349,6 +390,33 @@ public class SftpFileSourceFactory extends FileSourceFactory {
 		this.channelWaitTimeout = channelWaitTimeout;
 	}
 
+	public boolean isSafeOverwrite() {
+		return safeOverwrite;
+	}
+
+	/**
+	 * true: an output stream that replaces a file (not append) writes to a
+	 * temporary file in the same directory, named ".name.random.tmp", and
+	 * renames it over the target when closed without an error. Until then
+	 * readers see the old file; if anything fails, the temporary file is
+	 * removed and the old file is left as it was. Atomic on OpenSSH
+	 * (posix-rename); elsewhere the old file is removed just before the
+	 * rename. What changes compared with writing in place:
+	 * <ul>
+	 * <li>it needs write permission on the directory, not just the file;</li>
+	 * <li>the new file keeps the old one's permission bits, but its owner and
+	 * group are the writer's, and hard links to the old file keep the old
+	 * contents;</li>
+	 * <li>writing through a symbolic link replaces the file it points to,
+	 * and the link stays;</li>
+	 * <li>a stream that's never closed leaves its temporary file behind.</li>
+	 * </ul>
+	 * Takes effect for streams opened afterwards.
+	 */
+	public void setSafeOverwrite(boolean safeOverwrite) {
+		this.safeOverwrite = safeOverwrite;
+	}
+
 	public int getServerAliveInterval() {
 		return serverAliveInterval;
 	}
@@ -421,10 +489,10 @@ public class SftpFileSourceFactory extends FileSourceFactory {
 
 	/** The shared connection, connecting first if needed. */
 	private SharedSession session() throws IOException {
-		SharedSession s = shared;
+		SharedSession s = link.session;
 		if( s == null || !s.connection.isConnected()) {
 			connect();
-			s = shared;
+			s = link.session;
 			if( s == null ) {
 				throw new IOException("Not connected to "+getUser()+"@"+getHost()+":"+getPort());
 			}
@@ -452,7 +520,12 @@ public class SftpFileSourceFactory extends FileSourceFactory {
 	}
 
 	/** Guards minaForRandomAccess; not the factory's lock, so a slow connect holds up nothing else. */
-	private final Object randomAccessLock = new Object();
+	private final Object randomAccessLock = new SerializableLock();
+
+	/** A lock object that doesn't stop the factory being serialized (a plain Object did). */
+	private static final class SerializableLock implements java.io.Serializable {
+		private static final long serialVersionUID = 1L;
+	}
 	/** See randomAccessFactory(); null until first needed, and after disconnect. */
 	private SftpFileSourceFactory minaForRandomAccess;
 
@@ -593,7 +666,7 @@ public class SftpFileSourceFactory extends FileSourceFactory {
 
 	@Override
 	public boolean isConnected() {
-		SharedSession s = shared;
+		SharedSession s = link.session;
 		return s != null && s.connection.isConnected();
 	}
 
@@ -634,18 +707,18 @@ public class SftpFileSourceFactory extends FileSourceFactory {
 			return true;
 		}
 		// no connection yet, or ours has died: drop it and get a live one
-		releaseSession();
+		releaseSession(link);
 		SharedSession s = acquireSession();
 		try {
 			// Check that SFTP works now, not on first use; the channel stays
 			// in the pool for that first use.
 			s.pool.borrow(SftpChannelPool.Use.CALL).close();
 		} catch (IOException | RuntimeException e) {
-			shared = s;
-			releaseSession();
+			link.session = s;
+			releaseSession(link);
 			throw e;
 		}
-		shared = s;
+		link.session = s;
 		return true;
 	}
 
@@ -757,9 +830,9 @@ public class SftpFileSourceFactory extends FileSourceFactory {
 	 * MINA waits up to 10 s for the server to confirm each channel's close,
 	 * which used to hold up every factory in the JVM.
 	 */
-	private void releaseSession() {
-		SharedSession s = shared;
-		shared = null;
+	private static void releaseSession(SessionLink link) {
+		SharedSession s = link.session;
+		link.session = null;
 		if( s == null ) {
 			return;
 		}
@@ -795,8 +868,8 @@ public class SftpFileSourceFactory extends FileSourceFactory {
 		if( mina != null ) {
 			mina.disConnectImpl();
 		}
-		// safe to call twice: the second call finds shared == null
-		releaseSession();
+		// safe to call twice: the second call finds link.session == null
+		releaseSession(link);
 	}
 
 	@Override
@@ -820,6 +893,7 @@ public class SftpFileSourceFactory extends FileSourceFactory {
 		ret.chunkSize = chunkSize;
 		ret.maxChannels = maxChannels;
 		ret.channelWaitTimeout = channelWaitTimeout;
+		ret.safeOverwrite = safeOverwrite;
 
 		return ret;
 	}
@@ -871,6 +945,7 @@ public class SftpFileSourceFactory extends FileSourceFactory {
 		ret.setProperty(PROP_ATTRIBUTE_CACHE_TTL, ""+attributeCacheTtl);
 		ret.setProperty(PROP_MAX_CHANNELS, ""+maxChannels);
 		ret.setProperty(PROP_CHANNEL_WAIT_TIMEOUT, ""+channelWaitTimeout);
+		ret.setProperty(PROP_SAFE_OVERWRITE, ""+safeOverwrite);
 
 		return ret;
 	}
@@ -975,6 +1050,10 @@ public class SftpFileSourceFactory extends FileSourceFactory {
 		String wait = p.getProperty(PROP_CHANNEL_WAIT_TIMEOUT);
 		if( wait != null && !wait.trim().isEmpty()) {
 			setChannelWaitTimeout(Long.parseLong(wait.trim()));
+		}
+		String safe = p.getProperty(PROP_SAFE_OVERWRITE);
+		if( safe != null && !safe.trim().isEmpty()) {
+			setSafeOverwrite(Boolean.parseBoolean(safe.trim()));
 		}
 	}
 
@@ -1106,7 +1185,7 @@ public class SftpFileSourceFactory extends FileSourceFactory {
 		try {
 			connect();
 			synchronized (this) {
-				session = shared;
+				session = link.session;
 			}
 		} catch (IOException e) {
 			logDebug("whoAmI: can't connect: "+e);
