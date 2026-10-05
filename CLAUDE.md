@@ -20,7 +20,7 @@ BjlFileSystemFtp, BjlFileSystemJdbc. They live next to this repo in
 
 ## Building and testing
 
-- `mvn package` runs the whole suite. At batch 19 that was 212 tests.
+- `mvn package` runs the whole suite. At batch 20 that was 218 tests.
 - `TestServer` picks the server once per run, by `-Dbjl.sftp.test.server`:
   - `auto` (the default) uses OpenSSH on **localhost:22** if `unittest1` /
     `0000` can log in, otherwise the embedded server.
@@ -67,6 +67,8 @@ BjlFileSystemFtp, BjlFileSystemJdbc. They live next to this repo in
   - Changes made through the same object are seen at once.
 - `SftpRandomAccessIoController` and `SftpSeekableInputStream`: random access
   in chunks (`getChunkSize()`, 128 KB since batch 17). Each borrows its own SFTP channel.
+  Random access that can write ("rw", "rws", "rwd", and the one-argument
+  constructor) always goes through MINA, even on a JSch factory (batch 20).
 - Streams, random-access files and seekable streams get their channel from
   `factory.openSftp()`, not `getConnection().openSftp()`. It borrows from the
   shared session's `SftpChannelPool` (`Use.STREAM`; calls use `Use.CALL`).
@@ -112,8 +114,13 @@ The full review is in the claude.ai project "FileSystem", in
 - **Batch 16 is merged** (below).
 - **Batch 17 is merged** (below).
 - **Batch 18 is merged** (below).
-- **Batch 19 is on its branch, not merged yet** (below). With it, every item
-  from the second review that Tony chose is done.
+- **Batch 19 is merged** (below).
+- **Batch 20 is on its branch, not merged yet** (below).
+- **Still optional, Tony's call:** #9 safe uploads (temporary file, then
+  rename; would be opt-in), #11 small races (`mkdirs()` when another program
+  creates the directory at the same time; factories dropped without
+  `disConnect()` keep their connection), #18 one MINA `SshClient` for all
+  connections, and `strictHostKeyChecking` defaulting to "no".
 - **Deferred:** CI. Tony isn't ready for it. A workflow would have to build
   BjlCore, BjlIo and BjlFileSystem first, because they're unpublished
   SNAPSHOTs. `TestSftpRandomAccessIoController` and `SftpCanonicalPathTest`
@@ -270,3 +277,28 @@ The full review is in the claude.ai project "FileSystem", in
   `isConnected()` to turn false, and now takes about 10 s less with MINA.
 - Measured through `DelayProxy` (50 ms round trip): 4 threads x 5 stats took
   22 round trips with calls serialized, 5 now.
+
+## Batch 20: random-access writes through MINA (`fix/sftp-review-20`)
+
+- JSch's public API can't write at an offset. `JschSftpFile.write` asks the
+  file's size and writes with RESUME at `position - size`, so if anyone else
+  changed the size in between, the data landed that many bytes away, or
+  JSch sent a negative offset (`SSH_FX_BAD_MESSAGE`). Tony chose to route
+  around it rather than detect it.
+- `SftpFileSourceFactory.randomAccessFactory()`: a MINA factory returns
+  itself. A JSch factory makes a MINA copy (`createThreadSafeCopy()` with
+  `implementation` "mina"), connected with `connectImpl()` on first use so
+  it isn't registered as a factory session, and disconnected in
+  `disConnectImpl()`. An explicit `sessionKey` gets "#mina" added, so MINA
+  never shares JSch's connection. Its own lock (`randomAccessLock`), not the
+  factory's. If MINA can't connect, opening fails with a message saying why
+  MINA was used; there's no fallback to JSch.
+- `SftpRandomAccessIoController` takes its channel from it for "rw",
+  "rws", "rwd" and the one-argument constructor. "r" and
+  `SftpSeekableInputStream` stay on JSch: its reads at an offset are safe.
+  `JschSftpFile.write` is unchanged, for direct `SftpChannel.open` users.
+- `SftpBatch20Test`: while another channel keeps growing the file to 8 KB
+  and cutting it to 4 KB, 200 random-access writes are each read back from
+  the server. Through JSch it fails on every run, usually on the first
+  write. Also: the MINA connection is made only for writing, is
+  disconnected with the factory, and gets its own key.

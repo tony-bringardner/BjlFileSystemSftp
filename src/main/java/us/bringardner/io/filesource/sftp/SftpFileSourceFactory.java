@@ -451,6 +451,59 @@ public class SftpFileSourceFactory extends FileSourceFactory {
 		return session().pool;
 	}
 
+	/** Guards minaForRandomAccess; not the factory's lock, so a slow connect holds up nothing else. */
+	private final Object randomAccessLock = new Object();
+	/** See randomAccessFactory(); null until first needed, and after disconnect. */
+	private SftpFileSourceFactory minaForRandomAccess;
+
+	/** The MINA factory randomAccessFactory() made, or null; for tests. */
+	SftpFileSourceFactory randomAccessCompanion() {
+		synchronized (randomAccessLock) {
+			return minaForRandomAccess;
+		}
+	}
+
+	/**
+	 * The factory whose channels random access that can write uses: this one
+	 * with MINA, and with JSch a MINA factory for the same account, connected
+	 * on first use and disconnected with this one.
+	 * <p>
+	 * JSch's public API can't write at an offset. JschSftpFile asks the file's
+	 * size and writes at "size + (position - size)", so a size change by
+	 * anyone else in between put the data in the wrong place, silently. MINA
+	 * writes at the position in one request. Read-only random access and
+	 * everything else still use JSch.
+	 * <p>
+	 * The MINA factory isn't registered as a factory session: it's internal.
+	 *
+	 * @throws IOException if MINA can't connect; the message says why it was tried
+	 */
+	SftpFileSourceFactory randomAccessFactory() throws IOException {
+		if( SshProviders.MINA.equals(getEffectiveImplementation())) {
+			return this;
+		}
+		synchronized (randomAccessLock) {
+			if( minaForRandomAccess == null || !minaForRandomAccess.isConnected()) {
+				SftpFileSourceFactory m = (SftpFileSourceFactory) createThreadSafeCopy();
+				m.implementation = SshProviders.MINA;
+				if( sessionKey != null && !sessionKey.isEmpty()) {
+					m.sessionKey = sessionKey+"#"+SshProviders.MINA;   // never JSch's connection
+				}
+				try {
+					m.connectImpl();
+				} catch (IOException e) {
+					throw new IOException("Random access that can write goes through MINA (JSch can't write at an offset safely),"
+							+" and MINA couldn't connect to "+getUser()+"@"+getHost()+":"+getPort()+": "+e.getMessage(), e);
+				}
+				if( minaForRandomAccess != null ) {
+					minaForRandomAccess.disConnectImpl();   // the dead one
+				}
+				minaForRandomAccess = m;
+			}
+			return minaForRandomAccess;
+		}
+	}
+
 	/**
 	 * Runs one SFTP call on a channel borrowed from the shared connection's
 	 * pool, given back when the call returns. Calls from different threads
@@ -734,6 +787,14 @@ public class SftpFileSourceFactory extends FileSourceFactory {
 
 	@Override
 	protected synchronized void disConnectImpl() {
+		SftpFileSourceFactory mina;
+		synchronized (randomAccessLock) {
+			mina = minaForRandomAccess;
+			minaForRandomAccess = null;
+		}
+		if( mina != null ) {
+			mina.disConnectImpl();
+		}
 		// safe to call twice: the second call finds shared == null
 		releaseSession();
 	}

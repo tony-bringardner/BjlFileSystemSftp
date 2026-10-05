@@ -41,7 +41,9 @@ import us.bringardner.io.filesource.sftp.client.SftpFile;
 
 /**
  * Random access to an SFTP file in chunks of the factory's chunk size. Uses
- * its own SFTP channel, so it doesn't compete with the factory's.
+ * a channel of its own from the pool. When it can write and the factory uses
+ * JSch, the channel comes from a MINA connection to the same account (see
+ * SftpFileSourceFactory.randomAccessFactory()).
  */
 public class SftpRandomAccessIoController extends AbstractRandomAccessIoController {
 
@@ -61,7 +63,7 @@ public class SftpRandomAccessIoController extends AbstractRandomAccessIoControll
 	public SftpRandomAccessIoController(FileSource file) throws IOException {
 		super(file);
 		myFactory = (SftpFileSourceFactory) file.getFileSourceFactory();
-		channel = myFactory.openSftp();
+		channel = myFactory.randomAccessFactory().openSftp();   // it may write: see randomAccessFactory()
 		readOnly = false;
 	}
 
@@ -82,7 +84,9 @@ public class SftpRandomAccessIoController extends AbstractRandomAccessIoControll
 		}
 		myFactory = (SftpFileSourceFactory) file.getFileSourceFactory();
 		readOnly = mode.equals("r");
-		channel = myFactory.openSftp();
+		// Writing goes through MINA even when the factory uses JSch, which
+		// can't write at an offset safely; see randomAccessFactory().
+		channel = readOnly ? myFactory.openSftp() : myFactory.randomAccessFactory().openSftp();
 		String path = file.getAbsolutePath();
 		try {
 			SftpAttributes a;
