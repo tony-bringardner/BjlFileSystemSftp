@@ -108,6 +108,14 @@
 			<artifactId>bjl_file_system</artifactId>
 			<version>1.0.2-SNAPSHOT</version>
 		</dependency>
+		<!-- The shared FileSource test suite -->
+		<dependency>
+			<groupId>us.bringardner</groupId>
+			<artifactId>bjl_file_system</artifactId>
+			<version>1.0.2-SNAPSHOT</version>
+			<type>test-jar</type>
+			<scope>test</scope>
+		</dependency>
 		
 		<!-- SSH libraries. Both are included; which one is used is chosen at run
 		     time with the "implementation" connection property or the system

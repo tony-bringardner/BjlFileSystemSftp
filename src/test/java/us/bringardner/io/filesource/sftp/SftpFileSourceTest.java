@@ -1,29 +1,31 @@
 package us.bringardner.io.filesource.sftp;
 
-import static org.junit.jupiter.api.Assertions.assertTrue;
-
 import java.io.IOException;
-import java.util.Properties;
 
 import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.Test;
 
-/**
- * Runs the general FileSource tests in FileSourceAbstractTestClass (roots,
- * copying a directory tree up and back, rename, delete, permissions) against
- * SFTP. Nothing extended that class before, so these tests never ran.
- *
- * Connects to the test server: OpenSSH on localhost:22 or the embedded
- * server (see TestServer).
- */
-public class SftpFileSourceTest extends FileSourceAbstractTestClass {
+import us.bringardner.io.filesource.test.AbstractTestClass;
+
+/** The shared FileSource tests over SFTP (see TestServer for the server). */
+public class SftpFileSourceTest extends AbstractTestClass {
 
 	@BeforeAll
 	public static void setUp() throws IOException {
 		localTestFileDirPath = "TestFiles";
 		localCacheDirPath = "target/SftpFileSourceTestCache";
 		remoteTestFileDirPath = "SftpFileSourceTest";
+		factory = TestServer.connect(null);
+	}
 
-		SftpFileSourceFactory sftp = TestServer.connect(null);
-		factory = sftp;
+	/**
+	 * getCanonicalPath() looks at every directory from the root down, which
+	 * the embedded server's sandbox refuses above its home directory.
+	 */
+	@Override
+	@Test
+	public void testIsChildOfMineContract() throws IOException {
+		TestServer.assumeOpenSsh();
+		super.testIsChildOfMineContract();
 	}
 }
