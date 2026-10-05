@@ -91,20 +91,22 @@ The full review is in the claude.ai project "FileSystem", in
   settings panel.
 - **Batch 11 is merged.** It updated `maven-compiler-plugin` from 3.3 to
   3.16.0 and uses `<release>11</release>`, so Maven 3.6.3 or newer is needed.
-- **Not code:** the private key that used to be embedded in
-  `SftpPropertyEditPanel` was public on GitHub. It must be removed from
-  `authorized_keys` on every server that accepts it. Never print it.
+- **Not code, done:** the private key that used to be embedded in
+  `SftpPropertyEditPanel` was public on GitHub. Tony has removed it from
+  `authorized_keys` on the servers that accepted it. Never print it.
 - **Batch 12 is merged.** It added read-ahead for random access (below).
 - **Batch 13 is merged.** It added a pool of idle SFTP channels (below).
 - **Batch 14 is merged.** The settings
   panel (`SftpPropertyEditPanel`) no longer fills in `unittest1` and
   `localhost`; it starts empty except for port 22.
   `SftpPropertyEditPanelTest` checks this.
-- **Batch 15** is done on `fix/sftp-review-15`, not merged yet. Without an
-  OpenSSH server, the tests run on the embedded server (see Building and
-  testing). There's no CI workflow file yet.
-- **Still open:** no code items. The key above still needs removing from
-  `authorized_keys`.
+- **Batch 15 is merged.** Without an OpenSSH server, the tests run on the
+  embedded server (see Building and testing).
+- **The review is complete.** Nothing is open.
+- **Deferred:** CI. Tony isn't ready for it. A workflow would have to build
+  BjlCore, BjlIo and BjlFileSystem first, because they're unpublished
+  SNAPSHOTs. `TestSftpRandomAccessIoController` and `SftpCanonicalPathTest`
+  use fixed ports (2222, 2224), which could clash on a shared CI machine.
 
 ## Batch 12: read-ahead for random access (`fix/sftp-review-12`)
 
