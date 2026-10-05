@@ -20,7 +20,7 @@ BjlFileSystemFtp, BjlFileSystemJdbc. They live next to this repo in
 
 ## Building and testing
 
-- `mvn package` runs the whole suite. At batch 12 that was 128 tests.
+- `mvn package` runs the whole suite. At batch 13 that was 146 tests.
 - Most tests need a real SSH server on **localhost:22** with these accounts:
   `unittest1` / `0000` (groups `testgroup1`, `testgroup2`), `unittest2`,
   `unittest3`, and `unittest4`, which is SFTP-only and can't run commands.
@@ -50,7 +50,12 @@ BjlFileSystemFtp, BjlFileSystemJdbc. They live next to this repo in
     `refresh()`).
   - Changes made through the same object are seen at once.
 - `SftpRandomAccessIoController` and `SftpSeekableInputStream`: random access
-  in chunks (`getChunkSize()`, 32 KB). Each opens its own SFTP channel.
+  in chunks (`getChunkSize()`, 32 KB). Each borrows its own SFTP channel.
+- Streams, random-access files and seekable streams get their channel from
+  `factory.openSftp()`, not `getConnection().openSftp()`. It borrows from the
+  shared session's `SftpChannelPool` (at most 4 idle). The channel comes back
+  as a `PooledSftpChannel`, and closing it returns it to the pool only if no
+  call on it threw and every stream or file opened on it was closed.
 - `client/`: the interface that hides the SSH library. It has `SshProvider`,
   `SshProviders`, `SshConnection`, `SftpChannel`, `SftpFile`,
   `SftpAttributes`, `SftpEntry` and `SshSettings`.
@@ -77,14 +82,13 @@ The full review is in the claude.ai project "FileSystem", in
 - **Not code:** the private key that used to be embedded in
   `SftpPropertyEditPanel` was public on GitHub. It must be removed from
   `authorized_keys` on every server that accepts it. Never print it.
-- **Batch 12** is done on `fix/sftp-review-12` (below).
-- **Still open:** batch 13 below. Also: moving the tests onto the
+- **Batch 12 is merged.** It added read-ahead for random access (below).
+- **Batch 13** is done on `fix/sftp-review-13` (below).
+- **Still open:** moving the tests onto the
   embedded server so CI can run them, and the Swing panel pre-filling
   `unittest1` and `localhost`.
 
 ## Batch 12: read-ahead for random access (`fix/sftp-review-12`)
-
-**Done on its branch; not merged yet.**
 
 - `MinaSftpFile`: a read after a seek is one request. Once reads move
   forward, they come from MINA's `SftpInputStreamAsync` on the same handle
@@ -104,34 +108,24 @@ The full review is in the claude.ai project "FileSystem", in
 
 ## Batch 13: a pool of open SFTP channels (`fix/sftp-review-13`)
 
-**Problem.** Every input stream, output stream, random-access file and
-seekable stream opens a new SFTP channel through `getConnection().openSftp()`.
-That's about 3 round trips: channel open, subsystem request and SFTP init.
-Code that opens many small streams, such as copying a folder of small files,
-pays that every time.
+**Done on its branch; not merged yet.**
 
-**Suggested approach:**
-
-- Keep a small pool of idle `SftpChannel`s per shared SSH session, next to the
-  reference count.
-- To borrow, take an idle channel that is still open, or open a new one.
-- When a stream is done with a channel, give it back only if it's still open,
-  the stream closed cleanly, and every handle on it is closed. Otherwise close
-  the channel.
-- Keep at most a few idle channels (for example, 4) and close the rest.
-  OpenSSH's default `MaxSessions` is 10 per connection, and that limit counts
-  channels in use plus idle ones.
-- Close every pooled channel when the session closes, that is, when the last
-  factory disconnects.
-- Never give one channel to two users at once. Channels aren't thread-safe.
-- Optionally, close channels that have sat idle for a while.
-
-**Tests**, with both libraries:
-
-- Opening and closing 50 streams one after another opens only a few channels.
-- 8 threads using streams at once get correct data.
-- A stream that failed (for example, permission denied) doesn't put its
-  channel back in the pool.
-- Disconnecting closes the idle channels.
-- The 10-channel limit is never hit when 15 streams are opened and closed in a
-  row.
+- `SftpChannelPool` sits on each `SharedSession`. `borrow()` takes the most
+  recently returned idle channel that's still open, or opens a new one. It
+  keeps at most 4 idle channels and closes any that have been idle for 60 s
+  the next time the pool is used. The pool is closed when the last factory
+  lets go of the session.
+- `PooledSftpChannel` wraps a borrowed channel. Any exception, even a missing
+  file, marks it failed. A channel closed while one of its streams or files
+  is still open isn't returned. After `close()` it refuses every call.
+- Closing a channel used not to wait for the server, so a channel opened
+  right after a close could be refused by OpenSSH's 10-channel limit.
+  `MinaSftpChannel.close()` now waits up to 10 s for the close to finish.
+  JSch has no way to wait, so `JschConnection.openSftp()` retries a refused
+  open for up to 1 s. With JSch, the old code failed the 8-thread test
+  this way.
+- `SftpChannelPoolTest` checks this with both libraries: 50 streams in a
+  row, 15 in a row, the idle limit, borrowing, 8 threads, failed streams, a
+  stream left open, close-then-open at the limit, and disconnect. No test
+  reliably fails without the MINA close wait. The race showed up once and
+  couldn't be reproduced on localhost.

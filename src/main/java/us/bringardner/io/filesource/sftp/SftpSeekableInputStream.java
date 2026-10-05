@@ -47,7 +47,7 @@ public class SftpSeekableInputStream implements ISeekableInputStream {
 		this.path = file.getAbsolutePath();
 		SftpFileSourceFactory factory = (SftpFileSourceFactory) file.getFileSourceFactory();
 		this.buffer = new byte[Math.max(1024, factory.getChunkSize())];
-		this.channel = factory.getConnection().openSftp();
+		this.channel = factory.openSftp();
 		try {
 			SftpAttributes a = channel.stat(path);   // follows links
 			if( a.isDir()) {

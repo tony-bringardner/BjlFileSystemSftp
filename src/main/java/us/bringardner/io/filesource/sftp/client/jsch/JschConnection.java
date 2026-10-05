@@ -28,14 +28,42 @@ class JschConnection implements SshConnection {
 		return session.isConnected();
 	}
 
+	/** How long openSftp() keeps retrying when the server refuses a channel. */
+	static final long REFUSED_RETRY_MS = 1000;
+
+	/**
+	 * Opens an SFTP channel. If the server refuses it, tries again for up to
+	 * REFUSED_RETRY_MS: JSch's disconnect() doesn't wait for the server to
+	 * confirm a channel is closed, so right after one is closed it may still
+	 * count against the server's limit (OpenSSH: 10 per connection).
+	 */
 	@Override
 	public SftpChannel openSftp() throws IOException {
-		try {
-			ChannelSftp channel = (ChannelSftp) session.openChannel("sftp");
-			channel.connect(timeoutMs);
-			return new JschSftpChannel(channel);
-		} catch (JSchException e) {
-			throw new IOException(e.getMessage(), e);
+		long giveUp = System.currentTimeMillis() + REFUSED_RETRY_MS;
+		long pause = 5;
+		while( true ) {
+			ChannelSftp channel = null;
+			try {
+				channel = (ChannelSftp) session.openChannel("sftp");
+				channel.connect(timeoutMs);
+				return new JschSftpChannel(channel);
+			} catch (JSchException e) {
+				// a refusal leaves the server's reason code (1-4) as the exit status; a timeout leaves -1
+				boolean refused = channel != null && channel.getExitStatus() > 0 && session.isConnected();
+				if( channel != null ) {
+					channel.disconnect();
+				}
+				if( !refused || System.currentTimeMillis() + pause > giveUp ) {
+					throw new IOException(e.getMessage(), e);
+				}
+			}
+			try {
+				Thread.sleep(pause);
+			} catch (InterruptedException e) {
+				Thread.currentThread().interrupt();
+				throw new IOException("Interrupted while opening an SFTP channel");
+			}
+			pause = Math.min(pause * 2, 100);
 		}
 	}
 

@@ -73,7 +73,7 @@ public class SftpFileSource extends BaseObject implements FileSource {
 			attr = null;
 			exists = null;
 
-			mySftp = factory.getConnection().openSftp();
+			mySftp = factory.openSftp();
 			try {
 				this.out = mySftp.write(path, append);
 			} catch (IOException | RuntimeException e) {
@@ -143,7 +143,7 @@ public class SftpFileSource extends BaseObject implements FileSource {
 			attr = null;
 			exists = null;
 
-			mySftp = factory.getConnection().openSftp();
+			mySftp = factory.openSftp();
 			try {
 				in = mySftp.read(path, skipTo);
 			} catch (IOException | RuntimeException e) {

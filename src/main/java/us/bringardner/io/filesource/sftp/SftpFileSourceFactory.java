@@ -134,10 +134,13 @@ public class SftpFileSourceFactory extends FileSourceFactory {
 		final SshConnection connection;
 		/** Number of factories holding this connection; guarded by 'sessions'. */
 		int refs = 1;
+		/** Idle SFTP channels for streams; closed with the connection. */
+		final SftpChannelPool pool;
 
 		SharedSession(String key, SshConnection connection) {
 			this.key = key;
 			this.connection = connection;
+			this.pool = new SftpChannelPool(connection);
 		}
 	}
 
@@ -366,6 +369,25 @@ public class SftpFileSourceFactory extends FileSourceFactory {
 	}
 
 	/**
+	 * An SFTP channel for one stream or file, from the shared connection's
+	 * pool of idle channels when there is one. Closing it gives it back to
+	 * the pool (see PooledSftpChannel). Connects first if needed.
+	 */
+	SftpChannel openSftp() throws IOException {
+		return channelPool().borrow();
+	}
+
+	/** The shared connection's channel pool, connecting first if needed. */
+	SftpChannelPool channelPool() throws IOException {
+		if( !isConnected()) {
+			connect();
+		}
+		synchronized (this) {
+			return shared.pool;
+		}
+	}
+
+	/**
 	 * Runs one SFTP call on this factory's channel, holding the factory's lock
 	 * so calls from different threads can't interleave on the channel.
 	 * Reconnects first if the channel or connection has closed.
@@ -513,6 +535,7 @@ public class SftpFileSourceFactory extends FileSourceFactory {
 				if( sessions.get(s.key) == s ) {
 					sessions.remove(s.key);
 				}
+				s.pool.close();
 				s.connection.close();
 			}
 		}

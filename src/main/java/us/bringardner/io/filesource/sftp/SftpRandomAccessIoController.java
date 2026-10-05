@@ -61,7 +61,7 @@ public class SftpRandomAccessIoController extends AbstractRandomAccessIoControll
 	public SftpRandomAccessIoController(FileSource file) throws IOException {
 		super(file);
 		myFactory = (SftpFileSourceFactory) file.getFileSourceFactory();
-		channel = myFactory.getConnection().openSftp();
+		channel = myFactory.openSftp();
 		readOnly = false;
 	}
 
@@ -82,7 +82,7 @@ public class SftpRandomAccessIoController extends AbstractRandomAccessIoControll
 		}
 		myFactory = (SftpFileSourceFactory) file.getFileSourceFactory();
 		readOnly = mode.equals("r");
-		channel = myFactory.getConnection().openSftp();
+		channel = myFactory.openSftp();
 		String path = file.getAbsolutePath();
 		try {
 			SftpAttributes a;

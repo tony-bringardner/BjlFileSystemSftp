@@ -216,9 +216,26 @@ class MinaSftpChannel implements SftpChannel {
 		return new MinaSftpFile(this, path, h, write);
 	}
 
+	/** How long close() waits for the server to confirm the channel is closed. */
+	static final long CLOSE_WAIT_MS = 10_000;
+
+	/**
+	 * Closes the channel and waits for the server to confirm it. MINA's
+	 * SftpClient.close() only starts closing; until the server confirms, the
+	 * channel still counts against its limit (OpenSSH: 10 per connection),
+	 * so a channel opened right after could be refused.
+	 */
 	@Override
 	public void close() {
-		IoUtils.closeQuietly(sftp);
+		try {
+			if( sftp.isOpen()) {
+				sftp.getClientChannel().close(false).await(CLOSE_WAIT_MS);
+			}
+		} catch (IOException | RuntimeException e) {
+			// closing anyway
+		} finally {
+			IoUtils.closeQuietly(sftp);
+		}
 	}
 
 	/** Reads a file from a position through an open handle, BUFFER_SIZE bytes per request. */
