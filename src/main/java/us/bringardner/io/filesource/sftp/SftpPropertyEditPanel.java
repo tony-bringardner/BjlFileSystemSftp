@@ -131,7 +131,6 @@ public class SftpPropertyEditPanel extends JPanel implements IConnectionProperti
 		
 		userTextField = new JTextField();
 		userPanel.add(userTextField);
-		userTextField.setText("unittest1");
 		userTextField.setColumns(10);
 		
 		hostPortPanel = new JPanel();
@@ -144,7 +143,6 @@ public class SftpPropertyEditPanel extends JPanel implements IConnectionProperti
 		
 		hostTextField = new JTextField();
 		hostPortPanel.add(hostTextField);
-		hostTextField.setText("localhost");
 		hostTextField.setColumns(30);
 		
 		JLabel lblNewLabel_4 = new JLabel("Port");

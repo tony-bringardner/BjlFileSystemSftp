@@ -20,7 +20,7 @@ BjlFileSystemFtp, BjlFileSystemJdbc. They live next to this repo in
 
 ## Building and testing
 
-- `mvn package` runs the whole suite. At batch 13 that was 146 tests.
+- `mvn package` runs the whole suite. At batch 14 that was 148 tests.
 - Most tests need a real SSH server on **localhost:22** with these accounts:
   `unittest1` / `0000` (groups `testgroup1`, `testgroup2`), `unittest2`,
   `unittest3`, and `unittest4`, which is SFTP-only and can't run commands.
@@ -83,10 +83,14 @@ The full review is in the claude.ai project "FileSystem", in
   `SftpPropertyEditPanel` was public on GitHub. It must be removed from
   `authorized_keys` on every server that accepts it. Never print it.
 - **Batch 12 is merged.** It added read-ahead for random access (below).
-- **Batch 13** is done on `fix/sftp-review-13` (below).
-- **Still open:** moving the tests onto the
-  embedded server so CI can run them, and the Swing panel pre-filling
-  `unittest1` and `localhost`.
+- **Batch 13 is merged.** It added a pool of idle SFTP channels (below).
+- **Batch 14** is done on `fix/sftp-review-14`, not merged yet. The settings
+  panel (`SftpPropertyEditPanel`) no longer fills in `unittest1` and
+  `localhost`; it starts empty except for port 22.
+  `SftpPropertyEditPanelTest` checks this.
+- **Still open:** moving the tests onto the embedded server so CI can run
+  them. Tests that need real OpenSSH (permissions, groups, the `id` command,
+  `unittest2`–`4`, the 10-channel limit) would stay on localhost:22.
 
 ## Batch 12: read-ahead for random access (`fix/sftp-review-12`)
 
@@ -107,8 +111,6 @@ The full review is in the claude.ai project "FileSystem", in
   about 10.
 
 ## Batch 13: a pool of open SFTP channels (`fix/sftp-review-13`)
-
-**Done on its branch; not merged yet.**
 
 - `SftpChannelPool` sits on each `SharedSession`. `borrow()` takes the most
   recently returned idle channel that's still open, or opens a new one. It
