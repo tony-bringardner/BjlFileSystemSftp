@@ -20,7 +20,7 @@ BjlFileSystemFtp, BjlFileSystemJdbc. They live next to this repo in
 
 ## Building and testing
 
-- `mvn package` runs the whole suite. At batch 21 that was 244 tests.
+- `mvn package` runs the whole suite. At batch 22 that was 251 tests.
 - `TestServer` picks the server once per run, by `-Dbjl.sftp.test.server`:
   - `auto` (the default) uses OpenSSH on **localhost:22** if `unittest1` /
     `0000` can log in, otherwise the embedded server.
@@ -35,7 +35,11 @@ BjlFileSystemFtp, BjlFileSystemJdbc. They live next to this repo in
   accounts and the 10-channel limit. On the embedded server they're skipped
   (36 of them at batch 21). On Tony's machine `auto` picks OpenSSH, so every
   test runs.
-- New tests connect with `TestServer.connect(impl)`. A test that needs a
+- New tests connect with `TestServer.connect(impl)`, or build on
+  `TestServer.properties(impl, port)`. Both turn host key checking off
+  (`strictHostKeyChecking=no`), since the test servers' keys aren't in any
+  known_hosts file and checking is on by default since batch 22. A test
+  that makes its own factory must do the same. A test that needs a
   connection of its own (its own pool and limits) sets a unique `sessionKey`
   property; before batch 19 that property was silently ignored.
 - `TestSftpRandomAccessIoController` (port 2222) and `SftpCanonicalPathTest`
@@ -116,9 +120,18 @@ The full review is in the claude.ai project "FileSystem", in
 - **Batch 18 is merged** (below).
 - **Batch 19 is merged** (below).
 - **Batch 20 is merged** (below).
-- **Batch 21 is on its branch, not merged yet** (below).
-- **Still optional, Tony's call:** #18 one MINA `SshClient` for all
-  connections, and `strictHostKeyChecking` defaulting to "no".
+- **Batch 21 is merged** (below).
+- **Batch 22 is on its branch, not merged yet** (below).
+- **Skipped, Tony's call:** #18, one MINA `SshClient` for all connections.
+  Measured: no difference in connect time (about 260 ms, nearly all login)
+  or transfer speed; it saves about 9 idle threads per MINA connection on a
+  12-CPU machine. Only worth it for dozens of servers at once.
+- **Seen once, not fixed:** in one full run, `TestSftpRandomAccessIoController
+  .testWriteRandomcIo` hung forever in JSch's `put` stream `close()`, waiting
+  for the embedded server's reply to the last write. It passed 6 times alone
+  and in the next full runs. JSch waits for that reply with no time limit;
+  keepalives don't help when the server is alive but doesn't answer. Use
+  `-Dsurefire.timeout=540` so a hang fails the run instead of stalling it.
 - **Deferred:** CI. Tony isn't ready for it. A workflow would have to build
   BjlCore, BjlIo and BjlFileSystem first, because they're unpublished
   SNAPSHOTs. `TestSftpRandomAccessIoController` and `SftpCanonicalPathTest`
@@ -333,3 +346,26 @@ The full review is in the claude.ai project "FileSystem", in
   test connects in a helper method, so the factory is unreachable once it
   returns, and waits for the connection to close while calling
   `System.gc()`.
+
+
+## Batch 22: host key checking on by default (`fix/sftp-review-22`)
+
+- `strictHostKeyChecking` defaults to "yes" (`DEFAULT_STRICT_HOST_KEY_CHECKING`);
+  empty or null means the default. Before, any server was accepted, so one
+  could be impersonated. The known_hosts file is `knownHosts`, else
+  `~/.ssh/known_hosts` (`SshProviders.knownHostsFile`, shared by both
+  libraries). The batch 20 MINA connection for random-access writes gets the
+  same settings.
+- A rejected key (unknown or changed) is an IOException from
+  `SshProviders.hostKeyRejected`: it names the server and the file and
+  suggests `ssh-keyscan -p PORT HOST >> FILE` or `strictHostKeyChecking=no`.
+  The libraries' own messages were "reject HostKey: localhost" (JSch) and
+  "Server key did not validate" (MINA, for both cases). JSch's is matched by
+  message, so the original JSch 0.1.55 is covered too.
+- The test helpers set "no" (see Building and testing). README's property
+  table says "yes", and its JSch random-access sentence now matches batch 20.
+- `SftpBatch22Test`, both libraries: the default refuses an unknown server
+  and a changed key with the new message, and connects (including a
+  random-access write through MINA) with the server's key in known_hosts.
+  The key comes from `ssh-keyscan`, or, when that finds nothing (the
+  embedded server), from a MINA key exchange that records it.

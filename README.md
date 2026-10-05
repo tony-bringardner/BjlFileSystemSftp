@@ -28,7 +28,7 @@ or for the whole JVM with a system property:
 java -Dbjl.sftp.implementation=mina ...
 ```
 
-A factory's own setting wins over the system property. Both libraries behave the same through `FileSource`. With MINA, random access reads and writes at any position in one request each; with JSch, a write at a position is an open, the write and a close, because JSch has no public positional write.
+A factory's own setting wins over the system property. Both libraries behave the same through `FileSource`. With MINA, random access reads and writes at any position in one request each. JSch has no safe way to write at a position, so random access that can write (`rw`, `rws`, `rwd`) goes through a MINA connection to the same account even when JSch is chosen; reading stays on JSch.
 
 Code that needs to talk to the server directly can use the library-neutral interface in `us.bringardner.io.filesource.sftp.client` (`SshProviders`, `SshConnection`, `SftpChannel`, `SftpFile`).
 
@@ -38,7 +38,7 @@ Code that needs to talk to the server directly can use the library-neutral inter
 |---|---|---|
 | `host`, `port`, `user`, `password` | port 22 | Where and how to log in |
 | `identityFile` / `privateKey` | | Private key file path, or the key itself |
-| `strictHostKeyChecking` | `no` | `yes` rejects servers whose key isn't in `knownHosts` |
+| `strictHostKeyChecking` | `yes` | Connect only to servers whose host key is in `knownHosts`; the error says how to add one (`ssh-keyscan`). `no` accepts any server, which lets one be impersonated |
 | `knownHosts` | `~/.ssh/known_hosts` | known_hosts file used when checking is on |
 | `connectTimeout` | 30000 | Milliseconds for connect, handshake and login |
 | `serverAliveInterval` | 30000 | Milliseconds between keepalives; 0 turns them off |
