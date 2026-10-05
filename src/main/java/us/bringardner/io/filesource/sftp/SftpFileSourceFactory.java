@@ -38,7 +38,9 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Properties;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ExecutionException;
 import java.util.regex.Pattern;
 
 import us.bringardner.io.filesource.FileSource;
@@ -151,6 +153,11 @@ public class SftpFileSourceFactory extends FileSourceFactory {
 
 	/** Open shared connections by key; all access is synchronized on the map. */
 	private static final Map<String,SharedSession> sessions = new HashMap<>();
+	/**
+	 * Connects in progress, by key; guarded by 'sessions'. A factory that wants
+	 * a connection with the same key waits for that one instead of making its own.
+	 */
+	private static final Map<String,CompletableFuture<SharedSession>> connecting = new HashMap<>();
 
 	/** An SFTP call made on this factory's channel; see sftp(). */
 	public interface SftpOperation<T> {
@@ -524,20 +531,90 @@ public class SftpFileSourceFactory extends FileSourceFactory {
 		return true;
 	}
 
-	/** Reuses a live connection with the same key, or connects a new one. */
+	/**
+	 * Reuses a live connection with the same key, or connects a new one.
+	 * <p>
+	 * The connect itself (TCP, handshake and login, up to connectTimeout)
+	 * happens without the 'sessions' lock; it used to be held throughout, so
+	 * one slow or unreachable server held up every factory in the JVM. A
+	 * factory that asks for a key already being connected waits for that
+	 * connect and shares the result, failure included: the key covers the
+	 * credentials, so trying again at once would fail the same way.
+	 */
 	private SharedSession acquireSession() throws IOException {
 		String key = getSessionKey();
+		CompletableFuture<SharedSession> pending;
+		boolean mine = false;
 		synchronized (sessions) {
 			SharedSession s = sessions.get(key);
 			if( s != null && s.connection.isConnected()) {
 				s.refs++;
 				return s;
 			}
+			pending = connecting.get(key);
+			if( pending == null ) {
+				pending = new CompletableFuture<>();
+				connecting.put(key, pending);
+				mine = true;
+			}
+		}
+		if( mine ) {
+			return connectSession(key, pending);
+		}
+
+		SharedSession s = await(pending);
+		synchronized (sessions) {
+			// refs is 0 once the connecting factory has let go of it again
+			if( s.refs > 0 && s.connection.isConnected()) {
+				s.refs++;
+				return s;
+			}
+		}
+		return acquireSession();   // gone already; connect again
+	}
+
+	/** Connects for 'key' and hands the result to everyone waiting on 'pending'. */
+	private SharedSession connectSession(String key, CompletableFuture<SharedSession> pending) throws IOException {
+		SharedSession s;
+		try {
 			SshProvider provider = SshProviders.get(getEffectiveImplementation());
 			logDebug("Connecting to "+getUser()+"@"+getHost()+":"+getPort()+" with "+provider.getName());
-			s = new SharedSession(key, provider.connect(settings()));
+			s = new SharedSession(key, provider.connect(settings()));   // refs = 1: this factory's
+		} catch (IOException | RuntimeException | Error e) {
+			synchronized (sessions) {
+				connecting.remove(key);
+			}
+			pending.completeExceptionally(e);
+			throw e;
+		}
+		synchronized (sessions) {
+			connecting.remove(key);
+			// replaces a dead connection, if there was one; its holders still release it
 			sessions.put(key, s);
-			return s;
+		}
+		pending.complete(s);
+		return s;
+	}
+
+	/**
+	 * Waits for another factory's connect. It has its own time limits
+	 * (connectTimeout), so this needs none.
+	 */
+	private SharedSession await(CompletableFuture<SharedSession> pending) throws IOException {
+		try {
+			return pending.get();
+		} catch (InterruptedException e) {
+			Thread.currentThread().interrupt();
+			throw new IOException("Interrupted while waiting to connect to "+getUser()+"@"+getHost()+":"+getPort());
+		} catch (ExecutionException e) {
+			Throwable cause = e.getCause();
+			if( cause instanceof RuntimeException ) {
+				throw (RuntimeException) cause;
+			}
+			if( cause instanceof Error ) {
+				throw (Error) cause;
+			}
+			throw new IOException(cause.getMessage(), cause);
 		}
 	}
 
@@ -556,19 +633,29 @@ public class SftpFileSourceFactory extends FileSourceFactory {
 		return s;
 	}
 
-	/** Drops this factory's reference; the last factory to let go closes the connection. */
+	/**
+	 * Drops this factory's reference; the last factory to let go closes the
+	 * connection. The closing happens after the 'sessions' lock is let go:
+	 * MINA waits up to 10 s for the server to confirm each channel's close,
+	 * which used to hold up every factory in the JVM.
+	 */
 	private void releaseSession() {
 		SharedSession s = shared;
 		shared = null;
 		if( s == null ) {
 			return;
 		}
+		boolean last;
 		synchronized (sessions) {
-			if( --s.refs <= 0 ) {
-				if( sessions.get(s.key) == s ) {
-					sessions.remove(s.key);
-				}
+			last = --s.refs <= 0;
+			if( last && sessions.get(s.key) == s ) {
+				sessions.remove(s.key);
+			}
+		}
+		if( last ) {
+			try {
 				s.pool.close();
+			} finally {
 				s.connection.close();
 			}
 		}

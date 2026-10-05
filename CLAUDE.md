@@ -20,7 +20,7 @@ BjlFileSystemFtp, BjlFileSystemJdbc. They live next to this repo in
 
 ## Building and testing
 
-- `mvn package` runs the whole suite. At batch 17 that was 186 tests.
+- `mvn package` runs the whole suite. At batch 18 that was 194 tests.
 - `TestServer` picks the server once per run, by `-Dbjl.sftp.test.server`:
   - `auto` (the default) uses OpenSSH on **localhost:22** if `unittest1` /
     `0000` can log in, otherwise the embedded server.
@@ -103,10 +103,24 @@ The full review is in the claude.ai project "FileSystem", in
 - **Batch 15 is merged.** Without an OpenSSH server, the tests run on the
   embedded server (see Building and testing).
 - **Batch 16 is merged** (below).
-- **Batch 17 is on its branch, not merged yet** (below).
-- **The review is complete.** The rest of the second review's list is open:
-  connecting while holding the global `sessions` lock, no limit on channels
-  per connection, and metadata calls serialized on the factory's channel.
+- **Batch 17 is merged** (below).
+- **Batch 18 is on its branch, not merged yet** (below).
+- **Next: batch 19** (planned with Tony, not started): metadata calls
+  borrow pooled channels instead of each factory's own, and a channel limit
+  per connection. Decisions:
+  - New connection property `maxChannels`, configurable, default 8
+    (OpenSSH allows 10 per connection). Not part of the session key: the
+    first factory to connect sets it for the shared connection.
+  - A separate property for how long a borrow waits when every channel is
+    in use (not `connectTimeout`); then it fails with a clear message.
+  - Streams, random-access files and seekable streams may use at most
+    `maxChannels - 2`, so metadata calls can't be starved; `runCommand`
+    takes a slot too.
+  - `PooledSftpChannel` must keep a channel after a `NoSuchFileException`
+    or `AccessDeniedException` on a simple call (stat, list, ...), or every
+    `exists()` on a missing file would cost a new channel.
+  - Batch 17's `breakChannelOn` and batch 18's `slowCloseDoesNotHoldUpOthers`
+    use the factory's `sftp` field, which goes away; both need rework.
 - **Deferred:** CI. Tony isn't ready for it. A workflow would have to build
   BjlCore, BjlIo and BjlFileSystem first, because they're unpublished
   SNAPSHOTs. `TestSftpRandomAccessIoController` and `SftpCanonicalPathTest`
@@ -207,3 +221,20 @@ The full review is in the claude.ai project "FileSystem", in
   `client/jsch/JschTestAccess`, breaks the factory's channel with a
   reflection-injected proxy, and silences a connection with
   `DelayProxy.freeze()`. The 4 shell-command tests need OpenSSH.
+
+## Batch 18: connecting and closing outside the global lock (`fix/sftp-review-18`)
+
+- `acquireSession()` held the JVM-wide `sessions` lock for the whole SSH
+  connect and login, so one unreachable server held up every factory for up
+  to `connectTimeout`. Now the connect runs outside the lock. A
+  `CompletableFuture` in the `connecting` map lets factories with the same
+  key wait for that connect and share it, or its failure. A failure isn't
+  remembered: the next connect tries again.
+- `releaseSession()` closes the pool and connection after letting go of the
+  lock. MINA waits up to 10 s per channel for the server to confirm a close,
+  which used to hold everyone up.
+- `SftpBatch18Test` checks this with both libraries. Each test gets its own
+  connections through a unique `sessionKey`. The slow-connect test needs
+  192.0.2.1 to time out rather than be refused at once; if it's refused, the
+  test is skipped. MINA's slow-close test takes about 10 s, because its own
+  channel's close must time out first (batch 19 removes that channel).
