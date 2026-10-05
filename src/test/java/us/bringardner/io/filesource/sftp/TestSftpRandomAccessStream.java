@@ -104,17 +104,7 @@ public class TestSftpRandomAccessStream {
 
 
 	
-		factory = new SftpFileSourceFactory();
-
-		Properties p = factory.getConnectProperties();
-	
-		p.setProperty("user", user);
-		p.setProperty("host", host);
-		p.setProperty("port", ""+port);
-		p.setProperty("password",""+password);
-		factory.setConnectionProperties(p);		
-
-		assertTrue(factory.connect(),"Factory did not start.");
+		factory = TestServer.connect(null);
 
 		remoteDir = factory.createFileSource(remoteTestFileDirPath);
 		if( !remoteDir.exists()) {

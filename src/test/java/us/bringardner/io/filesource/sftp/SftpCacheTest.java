@@ -25,8 +25,8 @@ import us.bringardner.io.filesource.FileSource;
  * other SSH library's factory, so each change really comes from a different
  * object (and a different connection).
  *
- * Uses the same local SSH server and account as the other SFTP tests
- * (localhost:22, unittest1 / 0000).
+ * Connects to the test server: OpenSSH on localhost:22 or the embedded
+ * server (see TestServer).
  */
 public class SftpCacheTest {
 

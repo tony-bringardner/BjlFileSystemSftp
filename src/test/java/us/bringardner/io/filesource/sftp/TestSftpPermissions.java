@@ -82,6 +82,7 @@ public class TestSftpPermissions {
 	
 	@BeforeAll
 	public static void setupBeforeAll() throws IOException {
+		TestServer.assumeOpenSsh();   // other accounts, groups and Unix permissions
 
 
 
@@ -124,6 +125,9 @@ public class TestSftpPermissions {
 
 	@AfterAll
 	public static void teardownAfterAll() throws IOException {
+		if( factory1 == null ) {
+			return;   // skipped: no OpenSSH server
+		}
 		deleteAll(remoteDir1);
 
 		factory1.disConnect();

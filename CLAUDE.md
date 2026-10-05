@@ -20,12 +20,24 @@ BjlFileSystemFtp, BjlFileSystemJdbc. They live next to this repo in
 
 ## Building and testing
 
-- `mvn package` runs the whole suite. At batch 14 that was 148 tests.
-- Most tests need a real SSH server on **localhost:22** with these accounts:
-  `unittest1` / `0000` (groups `testgroup1`, `testgroup2`), `unittest2`,
-  `unittest3`, and `unittest4`, which is SFTP-only and can't run commands.
-- `TestSftpRandomAccessIoController` starts an embedded Maverick server on port
-  2222 instead.
+- `mvn package` runs the whole suite. At batch 15 that was 148 tests.
+- `TestServer` picks the server once per run, by `-Dbjl.sftp.test.server`:
+  - `auto` (the default) uses OpenSSH on **localhost:22** if `unittest1` /
+    `0000` can log in, otherwise the embedded server.
+  - `local` always uses localhost:22.
+  - `embedded` always uses an embedded Maverick server: a free port, only
+    `unittest1`, home in `target/embedded-sftp/home`. CI gets this mode.
+- The OpenSSH accounts: `unittest1` / `0000` (groups `testgroup1`,
+  `testgroup2`), `unittest2`, `unittest3`, and `unittest4`, which is
+  SFTP-only and can't run commands.
+- Tests that need OpenSSH call `TestServer.assumeOpenSsh()`: links, Unix
+  permissions, permission denied, the remote user, shell commands, the other
+  accounts and the 10-channel limit. On the embedded server they're skipped
+  (24 of them at batch 15). On Tony's machine `auto` picks OpenSSH, so every
+  test runs.
+- New tests connect with `TestServer.connect(impl)`.
+- `TestSftpRandomAccessIoController` (port 2222) and `SftpCanonicalPathTest`
+  (port 2224) start their own embedded servers.
 - Pick the SSH library for a run with `-Dbjl.sftp.implementation=jsch` (the
   default) or `=mina`. Most new tests are parameterized to run with both.
 - The core libraries are SNAPSHOT versions. If a build can't find them, run
@@ -84,13 +96,15 @@ The full review is in the claude.ai project "FileSystem", in
   `authorized_keys` on every server that accepts it. Never print it.
 - **Batch 12 is merged.** It added read-ahead for random access (below).
 - **Batch 13 is merged.** It added a pool of idle SFTP channels (below).
-- **Batch 14** is done on `fix/sftp-review-14`, not merged yet. The settings
+- **Batch 14 is merged.** The settings
   panel (`SftpPropertyEditPanel`) no longer fills in `unittest1` and
   `localhost`; it starts empty except for port 22.
   `SftpPropertyEditPanelTest` checks this.
-- **Still open:** moving the tests onto the embedded server so CI can run
-  them. Tests that need real OpenSSH (permissions, groups, the `id` command,
-  `unittest2`–`4`, the 10-channel limit) would stay on localhost:22.
+- **Batch 15** is done on `fix/sftp-review-15`, not merged yet. Without an
+  OpenSSH server, the tests run on the embedded server (see Building and
+  testing). There's no CI workflow file yet.
+- **Still open:** no code items. The key above still needs removing from
+  `authorized_keys`.
 
 ## Batch 12: read-ahead for random access (`fix/sftp-review-12`)
 

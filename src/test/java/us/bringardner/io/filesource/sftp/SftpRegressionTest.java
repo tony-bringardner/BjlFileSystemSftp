@@ -11,6 +11,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.io.FileNotFoundException;
 import java.io.IOException;
+import java.io.UncheckedIOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.nio.file.Files;
@@ -41,9 +42,10 @@ import us.bringardner.io.filesource.sftp.client.SftpChannel;
  * them can come back unnoticed. Each test names the bug it guards against.
  * Tests that go through an SSH library run with both JSch and MINA.
  *
- * Uses the same local SSH server and account as the other SFTP tests
- * (localhost:22, unittest1 / 0000); a few tests run shell commands (ln, a
- * long stderr) so the account needs shell access.
+ * Connects to the test server: OpenSSH on localhost:22 or the embedded
+ * server (see TestServer). Tests of links, Unix permissions, the remote
+ * user and shell commands need OpenSSH and are skipped on the embedded
+ * server.
  */
 public class SftpRegressionTest {
 
@@ -98,12 +100,20 @@ public class SftpRegressionTest {
 		return impl.equals("jsch") ? jsch : mina;
 	}
 
+	static int port() {
+		try {
+			return TestServer.port();
+		} catch (IOException e) {
+			throw new UncheckedIOException(e);
+		}
+	}
+
 	static SftpFileSourceFactory newFactory(String impl, String password) {
 		SftpFileSourceFactory f = new SftpFileSourceFactory();
 		Properties p = f.getConnectProperties();
 		p.setProperty("user", USER);
-		p.setProperty("host", "localhost");
-		p.setProperty("port", "22");
+		p.setProperty("host", TestServer.HOST);
+		p.setProperty("port", ""+port());
 		p.setProperty("password", password);
 		p.setProperty("implementation", impl);
 		f.setConnectionProperties(p);
@@ -245,6 +255,7 @@ public class SftpRegressionTest {
 	@ParameterizedTest
 	@ValueSource(strings = {"jsch", "mina"})
 	void unreadableFileFailsInsteadOfHanging(String impl) throws IOException {
+		TestServer.assumeOpenSsh();
 		SftpFileSourceFactory f = factory(impl);
 		String d = freshDir(impl, "noread");
 		FileSource x = write(f.createFileSource(d+"/x.bin"), new byte[100]);
@@ -260,6 +271,7 @@ public class SftpRegressionTest {
 	@ParameterizedTest
 	@ValueSource(strings = {"jsch", "mina"})
 	void readOnlyFileCanStillBeRead(String impl) throws IOException {
+		TestServer.assumeOpenSsh();
 		SftpFileSourceFactory f = factory(impl);
 		String d = freshDir(impl, "ro");
 		byte[] data = new byte[1000];
@@ -393,7 +405,7 @@ public class SftpRegressionTest {
 	void urlWithoutConnectionOrPassword() {
 		SftpFileSourceFactory f = newFactory("jsch", "secret-pw");
 		String url = f.getURL();
-		assertEquals("sftp://"+USER+"@localhost:22", url);
+		assertEquals("sftp://"+USER+"@localhost:"+port(), url);
 		assertFalse(url.contains("secret-pw"));
 		assertNotNull(f.getTitle());
 	}
@@ -402,6 +414,7 @@ public class SftpRegressionTest {
 	@ParameterizedTest
 	@ValueSource(strings = {"jsch", "mina"})
 	void runCommandWithLotsOfStderr(String impl) {
+		TestServer.assumeOpenSsh();
 		String out = assertTimeoutPreemptively(Duration.ofSeconds(30), () ->
 			factory(impl).runCommand("head -c 200000 /dev/zero | tr '\\0' x >&2; echo done"));
 		assertTrue(out.startsWith("done"));
@@ -503,6 +516,7 @@ public class SftpRegressionTest {
 	@ParameterizedTest
 	@ValueSource(strings = {"jsch", "mina"})
 	void linkToADirectoryIsADirectory(String impl) throws IOException {
+		TestServer.assumeOpenSsh();
 		SftpFileSourceFactory f = factory(impl);
 		String d = freshDir(impl, "links");
 		FileSource real = f.createFileSource(d+"/real");
@@ -526,6 +540,7 @@ public class SftpRegressionTest {
 	@ParameterizedTest
 	@ValueSource(strings = {"jsch", "mina"})
 	void brokenLinkDoesNotExist(String impl) throws IOException {
+		TestServer.assumeOpenSsh();
 		SftpFileSourceFactory f = factory(impl);
 		String d = freshDir(impl, "broken");
 		f.createSymbolicLink(f.createFileSource(d+"/dangling"), f.createFileSource(d+"/missing"));
@@ -536,6 +551,7 @@ public class SftpRegressionTest {
 	@ParameterizedTest
 	@ValueSource(strings = {"jsch", "mina"})
 	void relativeLinkTarget(String impl) throws IOException {
+		TestServer.assumeOpenSsh();
 		SftpFileSourceFactory f = factory(impl);
 		String d = freshDir(impl, "rel");
 		assertTrue(f.createFileSource(d+"/sub").mkdir());
@@ -549,6 +565,7 @@ public class SftpRegressionTest {
 	@ParameterizedTest
 	@ValueSource(strings = {"jsch", "mina"})
 	void deleteSemantics(String impl) throws IOException {
+		TestServer.assumeOpenSsh();
 		SftpFileSourceFactory f = factory(impl);
 		String d = freshDir(impl, "delete");
 		assertFalse(f.createFileSource(d+"/nope.txt").delete(), "false, like java.io.File");
@@ -566,6 +583,7 @@ public class SftpRegressionTest {
 	@ParameterizedTest
 	@ValueSource(strings = {"jsch", "mina"})
 	void permissionSettersKeepSpecialBits(String impl) throws IOException {
+		TestServer.assumeOpenSsh();
 		SftpFileSourceFactory f = factory(impl);
 		String d = freshDir(impl, "sticky");
 		FileSource dir = f.createFileSource(d+"/shared");
@@ -581,6 +599,7 @@ public class SftpRegressionTest {
 	@ParameterizedTest
 	@ValueSource(strings = {"jsch", "mina"})
 	void ownerAndIdentityAreRemote(String impl) throws IOException {
+		TestServer.assumeOpenSsh();
 		SftpFileSourceFactory f = factory(impl);
 		String d = freshDir(impl, "owner");
 		write(f.createFileSource(d+"/mine.txt"), new byte[1]);
@@ -611,6 +630,7 @@ public class SftpRegressionTest {
 	@ParameterizedTest
 	@ValueSource(strings = {"jsch", "mina"})
 	void hardLink(String impl) throws IOException {
+		TestServer.assumeOpenSsh();
 		SftpFileSourceFactory f = factory(impl);
 		String d = freshDir(impl, "hard");
 		FileSource orig = write(f.createFileSource(d+"/orig.txt"), "hello".getBytes("UTF-8"));

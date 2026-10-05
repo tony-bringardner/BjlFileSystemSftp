@@ -35,8 +35,8 @@ import us.bringardner.io.filesource.java.file.FileSourcePath;
  * directly and through java.nio (Files.newByteChannel). Each test runs with
  * both SSH libraries.
  *
- * Uses the same local SSH server and account as the other SFTP tests
- * (localhost:22, unittest1 / 0000).
+ * Connects to the test server: OpenSSH on localhost:22 or the embedded
+ * server (see TestServer).
  */
 public class SftpRandomAccessTest {
 
@@ -45,16 +45,7 @@ public class SftpRandomAccessTest {
 	static SftpFileSourceFactory mina;
 
 	static SftpFileSourceFactory connect(String implementation) throws IOException {
-		SftpFileSourceFactory f = new SftpFileSourceFactory();
-		Properties p = f.getConnectProperties();
-		p.setProperty("user", "unittest1");
-		p.setProperty("host", "localhost");
-		p.setProperty("port", "22");
-		p.setProperty("password", "0000");
-		p.setProperty("implementation", implementation);
-		f.setConnectionProperties(p);
-		assertTrue(f.connect(), "Factory did not connect");
-		return f;
+		return TestServer.connect(implementation);
 	}
 
 	@BeforeAll

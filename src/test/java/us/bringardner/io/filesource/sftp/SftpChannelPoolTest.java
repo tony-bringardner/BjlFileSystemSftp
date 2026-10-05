@@ -35,8 +35,9 @@ import us.bringardner.io.filesource.sftp.client.SftpChannel;
  * reused, and disconnecting closes the idle ones. Each test runs with both
  * SSH libraries.
  * <p>
- * Uses the same local SSH server and account as the other SFTP tests
- * (localhost:22, unittest1 / 0000).
+ * Connects to the test server: OpenSSH on localhost:22 or the embedded
+ * server (see TestServer). The tests of
+ * permission denied and OpenSSH's channel limit need OpenSSH.
  */
 public class SftpChannelPoolTest {
 
@@ -45,16 +46,7 @@ public class SftpChannelPoolTest {
 	static SftpFileSourceFactory mina;
 
 	static SftpFileSourceFactory connect(String implementation) throws IOException {
-		SftpFileSourceFactory f = new SftpFileSourceFactory();
-		Properties p = f.getConnectProperties();
-		p.setProperty("user", "unittest1");
-		p.setProperty("host", "localhost");
-		p.setProperty("port", "22");
-		p.setProperty("password", "0000");
-		p.setProperty("implementation", implementation);
-		f.setConnectionProperties(p);
-		assertTrue(f.connect(), "Factory did not connect");
-		return f;
+		return TestServer.connect(implementation);
 	}
 
 	@BeforeAll
@@ -224,6 +216,7 @@ public class SftpChannelPoolTest {
 	@ParameterizedTest
 	@ValueSource(strings = {"jsch", "mina"})
 	void closeThenOpenAtTheChannelLimit(String impl) throws IOException {
+		TestServer.assumeOpenSsh();
 		// OpenSSH's default limit is 10: the factory's own channel, the idle
 		// ones in the pool, and these
 		SftpFileSourceFactory f = factory(impl);
@@ -292,6 +285,7 @@ public class SftpChannelPoolTest {
 	@ParameterizedTest
 	@ValueSource(strings = {"jsch", "mina"})
 	void aFailedStreamDoesNotGiveBackItsChannel(String impl) throws IOException {
+		TestServer.assumeOpenSsh();
 		SftpFileSourceFactory f = factory(impl);
 		FileSource locked = file(f, "locked.txt");
 		write(locked, "secret".getBytes("UTF-8"));

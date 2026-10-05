@@ -35,8 +35,8 @@ import us.bringardner.io.filesource.sftp.client.SftpFile;
  * <p>
  * The speed tests connect through {@link DelayProxy}, which adds latency on
  * the way to the local SSH server; on plain localhost the gain doesn't show.
- * Uses the same local SSH server and account as the other SFTP tests
- * (localhost:22, unittest1 / 0000).
+ * Connects to the test server: OpenSSH on localhost:22 or the embedded
+ * server (see TestServer).
  */
 public class SftpReadAheadTest {
 
@@ -55,23 +55,14 @@ public class SftpReadAheadTest {
 	static SftpFileSourceFactory slowMina;
 
 	static SftpFileSourceFactory connect(String implementation, int port) throws IOException {
-		SftpFileSourceFactory f = new SftpFileSourceFactory();
-		Properties p = f.getConnectProperties();
-		p.setProperty("user", "unittest1");
-		p.setProperty("host", "localhost");
-		p.setProperty("port", ""+port);
-		p.setProperty("password", "0000");
-		p.setProperty("implementation", implementation);
-		f.setConnectionProperties(p);
-		assertTrue(f.connect(), "Factory did not connect");
-		return f;
+		return TestServer.connect(implementation, port);
 	}
 
 	@BeforeAll
 	static void setUp() throws IOException {
-		jsch = connect("jsch", 22);
-		mina = connect("mina", 22);
-		proxy = new DelayProxy(22, DELAY_MS);
+		jsch = TestServer.connect("jsch");
+		mina = TestServer.connect("mina");
+		proxy = new DelayProxy(TestServer.port(), DELAY_MS);
 		slowJsch = connect("jsch", proxy.port());
 		slowMina = connect("mina", proxy.port());
 		FileSource dir = jsch.createFileSource(DIR);
