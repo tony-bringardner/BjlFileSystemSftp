@@ -894,14 +894,32 @@ public class SftpFileSource extends BaseObject implements FileSource {
 	}
 
 	@Override
+	/**
+	 * Makes this one directory. As java.io.File.mkdir, false if something is
+	 * already there or the parent is missing (it used to throw an IOException
+	 * then); other failures, a refused permission or a lost connection, still
+	 * throw.
+	 */
 	public synchronized  boolean mkdir() throws IOException {
-		boolean ret = false;
-		factory.sftp(c -> { c.mkdir(path); return null; });
+		try {
+			factory.sftp(c -> { c.mkdir(path); return null; });
+		} catch (IOException e) {
+			clearAttr();
+			if( exists()) {
+				return false;
+			}
+			FileSource p = getParentFile();
+			if( p instanceof SftpFileSource ) {
+				((SftpFileSource) p).clearAttr();
+			}
+			if( p != null && !p.isDirectory()) {
+				return false;
+			}
+			throw e;
+		}
 		attr =  null;
 		exists = null;
-		ret = exists();
-
-		return ret;
+		return exists();
 	}
 
 	/**
@@ -920,15 +938,11 @@ public class SftpFileSource extends BaseObject implements FileSource {
 		if( p != null && !p.mkdirs()) {
 			return false;
 		}
-		try {
-			return mkdir();
-		} catch (IOException e) {
-			clearAttr();
-			if( isDirectory()) {
-				return true;   // made by someone else since exists() was answered
-			}
-			throw e;
+		if( mkdir()) {
+			return true;
 		}
+		clearAttr();
+		return isDirectory();   // made by someone else since exists() was answered
 	}
 
 	@Override
