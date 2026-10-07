@@ -31,11 +31,13 @@ public class SftpBatch16Test {
 
 	static SftpFileSourceFactory jsch;
 	static SftpFileSourceFactory mina;
+	static SftpFileSourceFactory bjl;
 
 	@BeforeAll
 	static void setUp() throws IOException {
 		jsch = TestServer.connect("jsch");
 		mina = TestServer.connect("mina");
+		bjl = TestServer.connect("bjl");
 		FileSource dir = jsch.createFileSource(DIR);
 		if( !dir.exists()) {
 			assertTrue(dir.mkdirs(), "Can't create "+dir);
@@ -47,6 +49,9 @@ public class SftpBatch16Test {
 		if( mina != null ) {
 			mina.disConnect();
 		}
+		if( bjl != null ) {
+			bjl.disConnect();
+		}
 		if( jsch != null ) {
 			SftpRandomAccessTest.deleteAll(jsch.createFileSource(DIR));
 			jsch.disConnect();
@@ -54,7 +59,7 @@ public class SftpBatch16Test {
 	}
 
 	static SftpFileSourceFactory factory(String impl) {
-		return impl.equals("jsch") ? jsch : mina;
+		return impl.equals("jsch") ? jsch : impl.equals("mina") ? mina : bjl;
 	}
 
 	/** An empty directory for one test, and its absolute path. */
@@ -78,7 +83,7 @@ public class SftpBatch16Test {
 	 * truncate, so a file created since the cache was filled was emptied.
 	 */
 	@ParameterizedTest
-	@ValueSource(strings = {"jsch", "mina"})
+	@ValueSource(strings = {"jsch", "mina", "bjl"})
 	void createNewFileNeverEmptiesAnExistingFile(String impl) throws IOException {
 		SftpFileSourceFactory f = factory(impl);
 		String d = freshDir(impl, "create-race");
@@ -92,7 +97,7 @@ public class SftpBatch16Test {
 
 	/** Like java.io.File: true when it creates the file, false when it was already there. */
 	@ParameterizedTest
-	@ValueSource(strings = {"jsch", "mina"})
+	@ValueSource(strings = {"jsch", "mina", "bjl"})
 	void createNewFileCreatesOnce(String impl) throws IOException {
 		SftpFileSourceFactory f = factory(impl);
 		String d = freshDir(impl, "create-once");
@@ -105,7 +110,7 @@ public class SftpBatch16Test {
 
 	/** The channel call itself: MINA's exclusive open and JSch's check-then-append. */
 	@ParameterizedTest
-	@ValueSource(strings = {"jsch", "mina"})
+	@ValueSource(strings = {"jsch", "mina", "bjl"})
 	void channelCreateNewKeepsExistingData(String impl) throws IOException {
 		SftpFileSourceFactory f = factory(impl);
 		String d = freshDir(impl, "create-channel");
@@ -120,7 +125,7 @@ public class SftpBatch16Test {
 
 	/** "rw" random access on an existing file opens it; it's not emptied. */
 	@ParameterizedTest
-	@ValueSource(strings = {"jsch", "mina"})
+	@ValueSource(strings = {"jsch", "mina", "bjl"})
 	void randomAccessRwKeepsExistingData(String impl) throws Exception {
 		SftpFileSourceFactory f = factory(impl);
 		String d = freshDir(impl, "create-rw");
@@ -143,7 +148,7 @@ public class SftpBatch16Test {
 	 * would have happened here.
 	 */
 	@ParameterizedTest
-	@ValueSource(strings = {"jsch", "mina"})
+	@ValueSource(strings = {"jsch", "mina", "bjl"})
 	void renameToAnotherServerDoesNothing(String impl) throws IOException {
 		SftpFileSourceFactory f = factory(impl);
 		String d = freshDir(impl, "rename");
@@ -170,7 +175,7 @@ public class SftpBatch16Test {
 
 	/** These used to throw NullPointerException for a file that doesn't exist. */
 	@ParameterizedTest
-	@ValueSource(strings = {"jsch", "mina"})
+	@ValueSource(strings = {"jsch", "mina", "bjl"})
 	void missingFileAnswersInsteadOfThrowing(String impl) throws IOException {
 		SftpFileSourceFactory f = factory(impl);
 		String d = freshDir(impl, "missing");

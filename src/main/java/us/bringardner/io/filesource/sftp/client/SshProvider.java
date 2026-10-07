@@ -3,12 +3,12 @@ package us.bringardner.io.filesource.sftp.client;
 import java.io.IOException;
 
 /**
- * An SSH library that can open connections: JSch or Apache MINA SSHD.
+ * An SSH library that can open connections: JSch, Apache MINA SSHD or BJL's own (bjl_net_ssh).
  * Pick one with {@link SshProviders#get(String)}.
  */
 public interface SshProvider {
 
-	/** Short name used to select it: "jsch" or "mina". */
+	/** Short name used to select it: "jsch", "mina" or "bjl". */
 	String getName();
 
 	/**

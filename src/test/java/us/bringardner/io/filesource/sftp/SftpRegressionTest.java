@@ -57,11 +57,13 @@ public class SftpRegressionTest {
 
 	static SftpFileSourceFactory jsch;
 	static SftpFileSourceFactory mina;
+	static SftpFileSourceFactory bjl;
 
 	@BeforeAll
 	static void setUp() throws IOException {
 		jsch = SftpRandomAccessTest.connect("jsch");
 		mina = SftpRandomAccessTest.connect("mina");
+		bjl = SftpRandomAccessTest.connect("bjl");
 		FileSource dir = jsch.createFileSource(DIR);
 		if( !dir.exists()) {
 			assertTrue(dir.mkdirs());
@@ -78,6 +80,9 @@ public class SftpRegressionTest {
 		}
 		if( mina != null ) {
 			mina.disConnect();
+		}
+		if( bjl != null ) {
+			bjl.disConnect();
 		}
 	}
 
@@ -97,7 +102,7 @@ public class SftpRegressionTest {
 	}
 
 	static SftpFileSourceFactory factory(String impl) {
-		return impl.equals("jsch") ? jsch : mina;
+		return impl.equals("jsch") ? jsch : impl.equals("mina") ? mina : bjl;
 	}
 
 	static int port() {
@@ -159,7 +164,7 @@ public class SftpRegressionTest {
 
 	/** (int)time/1000 overflowed, so every time set was garbage. */
 	@ParameterizedTest
-	@ValueSource(strings = {"jsch", "mina"})
+	@ValueSource(strings = {"jsch", "mina", "bjl"})
 	void modifiedAndAccessTimesRoundTrip(String impl) throws IOException {
 		SftpFileSourceFactory f = factory(impl);
 		String d = freshDir(impl, "times");
@@ -192,7 +197,7 @@ public class SftpRegressionTest {
 
 	/** setWritable(b, ownerOnly) had ownerOnly inverted. */
 	@ParameterizedTest
-	@ValueSource(strings = {"jsch", "mina"})
+	@ValueSource(strings = {"jsch", "mina", "bjl"})
 	void setWritableOwnerOnly(String impl) throws IOException {
 		SftpFileSourceFactory f = factory(impl);
 		String d = freshDir(impl, "writable");
@@ -223,7 +228,7 @@ public class SftpRegressionTest {
 
 	/** Shrinking ran "truncate -s N path" in a shell with the path unquoted. */
 	@ParameterizedTest
-	@ValueSource(strings = {"jsch", "mina"})
+	@ValueSource(strings = {"jsch", "mina", "bjl"})
 	void shrinkingAnOddNameRunsNoShellCommand(String impl) throws IOException {
 		SftpFileSourceFactory f = factory(impl);
 		String d = freshDir(impl, "odd");
@@ -240,7 +245,7 @@ public class SftpRegressionTest {
 
 	/** Random access never closed its channel; the 10th open failed. */
 	@ParameterizedTest
-	@ValueSource(strings = {"jsch", "mina"})
+	@ValueSource(strings = {"jsch", "mina", "bjl"})
 	void randomAccessClosesItsChannel(String impl) throws IOException {
 		SftpFileSourceFactory f = factory(impl);
 		String d = freshDir(impl, "leak");
@@ -255,7 +260,7 @@ public class SftpRegressionTest {
 
 	/** Opening a file without read permission waited forever for a second reply. */
 	@ParameterizedTest
-	@ValueSource(strings = {"jsch", "mina"})
+	@ValueSource(strings = {"jsch", "mina", "bjl"})
 	void unreadableFileFailsInsteadOfHanging(String impl) throws IOException {
 		TestServer.assumeOpenSsh();
 		SftpFileSourceFactory f = factory(impl);
@@ -271,7 +276,7 @@ public class SftpRegressionTest {
 
 	/** A read-only file couldn't be opened for random access at all. */
 	@ParameterizedTest
-	@ValueSource(strings = {"jsch", "mina"})
+	@ValueSource(strings = {"jsch", "mina", "bjl"})
 	void readOnlyFileCanStillBeRead(String impl) throws IOException {
 		TestServer.assumeOpenSsh();
 		SftpFileSourceFactory f = factory(impl);
@@ -297,7 +302,7 @@ public class SftpRegressionTest {
 
 	/** A factory with the wrong password reused another factory's logged-in session. */
 	@ParameterizedTest
-	@ValueSource(strings = {"jsch", "mina"})
+	@ValueSource(strings = {"jsch", "mina", "bjl"})
 	void wrongPasswordIsRefusedEvenWithASessionOpen(String impl) throws IOException {
 		assertTrue(factory(impl).isConnected(), "a good session is open");
 		SftpFileSourceFactory bad = newFactory(impl, "wrong-password");
@@ -306,7 +311,7 @@ public class SftpRegressionTest {
 
 	/** The first factory to disconnect closed the shared session under the others. */
 	@ParameterizedTest
-	@ValueSource(strings = {"jsch", "mina"})
+	@ValueSource(strings = {"jsch", "mina", "bjl"})
 	void disconnectingOneFactoryLeavesTheOthersWorking(String impl) throws IOException {
 		String d = freshDir(impl, "shared");
 		byte[] data = new byte[1 << 20];
@@ -338,7 +343,7 @@ public class SftpRegressionTest {
 
 	/** Calls from several threads interleaved on one channel and could hang. */
 	@ParameterizedTest
-	@ValueSource(strings = {"jsch", "mina"})
+	@ValueSource(strings = {"jsch", "mina", "bjl"})
 	void manyThreadsOnOneFactory(String impl) throws Exception {
 		SftpFileSourceFactory f = factory(impl);
 		String d = freshDir(impl, "threads");
@@ -379,7 +384,7 @@ public class SftpRegressionTest {
 
 	/** createThreadSafeCopy() shared the original's channel and lost settings. */
 	@ParameterizedTest
-	@ValueSource(strings = {"jsch", "mina"})
+	@ValueSource(strings = {"jsch", "mina", "bjl"})
 	void threadSafeCopyWorksAlongsideTheOriginal(String impl) throws Exception {
 		SftpFileSourceFactory f = factory(impl);
 		String d = freshDir(impl, "copy");
@@ -414,7 +419,7 @@ public class SftpRegressionTest {
 
 	/** runCommand read stdout then stderr, so a lot of stderr deadlocked it. */
 	@ParameterizedTest
-	@ValueSource(strings = {"jsch", "mina"})
+	@ValueSource(strings = {"jsch", "mina", "bjl"})
 	void runCommandWithLotsOfStderr(String impl) {
 		TestServer.assumeOpenSsh();
 		String out = assertTimeoutPreemptively(Duration.ofSeconds(30), () ->
@@ -425,7 +430,7 @@ public class SftpRegressionTest {
 
 	/** An unreachable host blocked forever: there was no connect timeout. */
 	@ParameterizedTest
-	@ValueSource(strings = {"jsch", "mina"})
+	@ValueSource(strings = {"jsch", "mina", "bjl"})
 	void unreachableHostTimesOut(String impl) {
 		SftpFileSourceFactory f = newFactory(impl, PASSWORD);
 		f.setHost(UNREACHABLE);
@@ -437,7 +442,7 @@ public class SftpRegressionTest {
 
 	/** Any host key was accepted; with checking on, an unknown server must be refused. */
 	@ParameterizedTest
-	@ValueSource(strings = {"jsch", "mina"})
+	@ValueSource(strings = {"jsch", "mina", "bjl"})
 	void strictHostKeyCheckingRefusesUnknownServers(String impl) throws IOException {
 		Path empty = Files.createTempFile("known_hosts", "");
 		try {
@@ -492,7 +497,7 @@ public class SftpRegressionTest {
 
 	/** JSch's connection thread wasn't a daemon, so a program that forgot disConnect() never exited. */
 	@ParameterizedTest
-	@ValueSource(strings = {"jsch", "mina"})
+	@ValueSource(strings = {"jsch", "mina", "bjl"})
 	void libraryThreadsDoNotKeepTheProgramAlive(String impl) throws IOException {
 		java.util.Set<Thread> before = Thread.getAllStackTraces().keySet();
 		SftpFileSourceFactory f = newFactory(impl, PASSWORD);
@@ -502,7 +507,9 @@ public class SftpRegressionTest {
 			f.createFileSource(DIR).exists();
 			List<String> nonDaemon = new ArrayList<>();
 			for (Thread t : Thread.getAllStackTraces().keySet()) {
-				if( !before.contains(t) && t.isAlive() && !t.isDaemon()) {
+				// The JDK's AWT-Shutdown thread comes and goes after the Swing panel test
+				// (SftpPropertyEditPanelTest); it isn't an SSH library's thread
+				if( !before.contains(t) && t.isAlive() && !t.isDaemon() && !t.getName().startsWith("AWT-")) {
 					nonDaemon.add(t.getName());
 				}
 			}
@@ -516,7 +523,7 @@ public class SftpRegressionTest {
 
 	/** A link to a directory wasn't a directory and couldn't be listed. */
 	@ParameterizedTest
-	@ValueSource(strings = {"jsch", "mina"})
+	@ValueSource(strings = {"jsch", "mina", "bjl"})
 	void linkToADirectoryIsADirectory(String impl) throws IOException {
 		TestServer.assumeOpenSsh();
 		SftpFileSourceFactory f = factory(impl);
@@ -540,7 +547,7 @@ public class SftpRegressionTest {
 
 	/** A link whose target is missing said it existed. */
 	@ParameterizedTest
-	@ValueSource(strings = {"jsch", "mina"})
+	@ValueSource(strings = {"jsch", "mina", "bjl"})
 	void brokenLinkDoesNotExist(String impl) throws IOException {
 		TestServer.assumeOpenSsh();
 		SftpFileSourceFactory f = factory(impl);
@@ -551,7 +558,7 @@ public class SftpRegressionTest {
 
 	/** A relative link target was resolved against the wrong directory. */
 	@ParameterizedTest
-	@ValueSource(strings = {"jsch", "mina"})
+	@ValueSource(strings = {"jsch", "mina", "bjl"})
 	void relativeLinkTarget(String impl) throws IOException {
 		TestServer.assumeOpenSsh();
 		SftpFileSourceFactory f = factory(impl);
@@ -565,7 +572,7 @@ public class SftpRegressionTest {
 
 	/** delete() of a missing file threw; deleting a link must not touch its target. */
 	@ParameterizedTest
-	@ValueSource(strings = {"jsch", "mina"})
+	@ValueSource(strings = {"jsch", "mina", "bjl"})
 	void deleteSemantics(String impl) throws IOException {
 		TestServer.assumeOpenSsh();
 		SftpFileSourceFactory f = factory(impl);
@@ -583,7 +590,7 @@ public class SftpRegressionTest {
 
 	/** Permission setters dropped the setuid/setgid/sticky bits. */
 	@ParameterizedTest
-	@ValueSource(strings = {"jsch", "mina"})
+	@ValueSource(strings = {"jsch", "mina", "bjl"})
 	void permissionSettersKeepSpecialBits(String impl) throws IOException {
 		TestServer.assumeOpenSsh();
 		SftpFileSourceFactory f = factory(impl);
@@ -599,7 +606,7 @@ public class SftpRegressionTest {
 
 	/** whoAmI() fell back to the local user; a directory's owner came from its first child. */
 	@ParameterizedTest
-	@ValueSource(strings = {"jsch", "mina"})
+	@ValueSource(strings = {"jsch", "mina", "bjl"})
 	void ownerAndIdentityAreRemote(String impl) throws IOException {
 		TestServer.assumeOpenSsh();
 		SftpFileSourceFactory f = factory(impl);
@@ -612,7 +619,7 @@ public class SftpRegressionTest {
 
 	/** canRead() and friends turned every error, even a lost connection, into false. */
 	@ParameterizedTest
-	@ValueSource(strings = {"jsch", "mina"})
+	@ValueSource(strings = {"jsch", "mina", "bjl"})
 	void permissionChecksReportConnectionErrors(String impl) throws IOException {
 		SftpFileSourceFactory g = newFactory(impl, PASSWORD);
 		g.connect();
@@ -630,7 +637,7 @@ public class SftpRegressionTest {
 
 	/** MINA couldn't make hard links on an OpenSSH server (SFTP v3). */
 	@ParameterizedTest
-	@ValueSource(strings = {"jsch", "mina"})
+	@ValueSource(strings = {"jsch", "mina", "bjl"})
 	void hardLink(String impl) throws IOException {
 		TestServer.assumeOpenSsh();
 		SftpFileSourceFactory f = factory(impl);
@@ -647,7 +654,7 @@ public class SftpRegressionTest {
 
 	/** Appending and reading from an offset, through each library's streams. */
 	@ParameterizedTest
-	@ValueSource(strings = {"jsch", "mina"})
+	@ValueSource(strings = {"jsch", "mina", "bjl"})
 	void appendAndReadFromOffset(String impl) throws IOException {
 		SftpFileSourceFactory f = factory(impl);
 		String d = freshDir(impl, "append");

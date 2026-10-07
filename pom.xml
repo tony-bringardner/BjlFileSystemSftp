@@ -90,6 +90,12 @@
 
 
 	<dependencies>
+		<!-- The BJL SSH library: the "bjl" implementation (client/bjl) -->
+		<dependency>
+			<groupId>us.bringardner</groupId>
+			<artifactId>bjl_net_ssh</artifactId>
+			<version>1.0.0-SNAPSHOT</version>
+		</dependency>
 		<!-- Used directly (Hex), so named here too -->
 		<dependency>
 			<groupId>us.bringardner</groupId>

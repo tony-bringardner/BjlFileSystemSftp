@@ -546,8 +546,9 @@ public class SftpFileSourceFactory extends FileSourceFactory {
 
 	/**
 	 * The factory whose channels random access that can write uses: this one
-	 * with MINA, and with JSch a MINA factory for the same account, connected
-	 * on first use and disconnected with this one.
+	 * with MINA or BJL (both write at an offset in one request), and with JSch
+	 * a MINA factory for the same account, connected on first use and
+	 * disconnected with this one.
 	 * <p>
 	 * JSch's public API can't write at an offset. JschSftpFile asks the file's
 	 * size and writes at "size + (position - size)", so a size change by
@@ -560,7 +561,8 @@ public class SftpFileSourceFactory extends FileSourceFactory {
 	 * @throws IOException if MINA can't connect; the message says why it was tried
 	 */
 	SftpFileSourceFactory randomAccessFactory() throws IOException {
-		if( SshProviders.MINA.equals(getEffectiveImplementation())) {
+		String impl = getEffectiveImplementation();
+		if( SshProviders.MINA.equals(impl) || SshProviders.BJL.equals(impl)) {
 			return this;
 		}
 		synchronized (randomAccessLock) {

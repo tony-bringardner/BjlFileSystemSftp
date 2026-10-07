@@ -64,7 +64,7 @@ public class SftpBatch22Test {
 
 	/** With nothing set, a server whose key isn't known is refused (it used to be accepted). */
 	@ParameterizedTest
-	@ValueSource(strings = {"jsch", "mina"})
+	@ValueSource(strings = {"jsch", "mina", "bjl"})
 	void unknownServerIsRefusedByDefault(String impl) throws IOException {
 		Path empty = Files.createTempFile("known_hosts", "");
 		try {
@@ -82,7 +82,7 @@ public class SftpBatch22Test {
 
 	/** A known_hosts entry with a different key for this server is refused too. */
 	@ParameterizedTest
-	@ValueSource(strings = {"jsch", "mina"})
+	@ValueSource(strings = {"jsch", "mina", "bjl"})
 	void changedKeyIsRefused(String impl) throws IOException {
 		Path wrong = Files.createTempFile("known_hosts", "");
 		try {
@@ -101,7 +101,7 @@ public class SftpBatch22Test {
 	 * through MINA even on a JSch factory, check the key the same way.
 	 */
 	@ParameterizedTest
-	@ValueSource(strings = {"jsch", "mina"})
+	@ValueSource(strings = {"jsch", "mina", "bjl"})
 	void knownServerConnectsByDefault(String impl) throws Exception {
 		Path known = Files.createTempFile("known_hosts", "");
 		try {

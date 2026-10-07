@@ -85,7 +85,7 @@ public class SftpBatch18Test {
 
 	/** A connect to a server that doesn't answer used to hold up every other connect in the JVM. */
 	@ParameterizedTest
-	@ValueSource(strings = {"jsch", "mina"})
+	@ValueSource(strings = {"jsch", "mina", "bjl"})
 	void slowConnectDoesNotHoldUpOthers(String impl) throws Exception {
 		SftpFileSourceFactory slow = newFactory(impl, TestServer.port(), newKey(impl));
 		slow.setHost(UNREACHABLE);
@@ -115,7 +115,7 @@ public class SftpBatch18Test {
 
 	/** Factories with the same key that connect at the same time share one connection. */
 	@ParameterizedTest
-	@ValueSource(strings = {"jsch", "mina"})
+	@ValueSource(strings = {"jsch", "mina", "bjl"})
 	void sameKeySharesOneConnect(String impl) throws Exception {
 		String key = newKey(impl);
 		List<SftpFileSourceFactory> factories = new ArrayList<>();
@@ -153,7 +153,7 @@ public class SftpBatch18Test {
 	 * the next connect with the key tries again.
 	 */
 	@ParameterizedTest
-	@ValueSource(strings = {"jsch", "mina"})
+	@ValueSource(strings = {"jsch", "mina", "bjl"})
 	void failedConnectIsSharedThenForgotten(String impl) throws Exception {
 		String key = newKey(impl);
 		List<SftpFileSourceFactory> factories = new ArrayList<>();
@@ -197,7 +197,7 @@ public class SftpBatch18Test {
 	 * the lock, so this test took 10 s longer with MINA.)
 	 */
 	@ParameterizedTest
-	@ValueSource(strings = {"jsch", "mina"})
+	@ValueSource(strings = {"jsch", "mina", "bjl"})
 	void slowCloseDoesNotHoldUpOthers(String impl) throws Exception {
 		try (SftpReadAheadTest.DelayProxy proxy = new SftpReadAheadTest.DelayProxy(TestServer.port(), 0)) {
 			SftpFileSourceFactory closing = newFactory(impl, proxy.port(), newKey(impl));

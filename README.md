@@ -3,12 +3,13 @@
 
 ## Choosing the SSH library
 
-Two SSH libraries are included, and which one is used is decided at run time:
+Three SSH libraries are included, and which one is used is decided at run time:
 
 | Value | Library |
 |---|---|
 | `jsch` (default) | [JSch, maintained fork](https://github.com/mwiede/jsch) (`com.github.mwiede:jsch`) |
 | `mina` | [Apache MINA SSHD](https://mina.apache.org/sshd-project/) |
+| `bjl` | [BjlSsh](https://github.com/tony-bringardner/BjlSsh) (`us.bringardner:bjl_net_ssh`), BJL's own SSH library: no third party code |
 
 Set it per factory with the `implementation` connection property:
 
@@ -18,17 +19,17 @@ Properties p = factory.getConnectProperties();
 p.setProperty("host", "example.com");
 p.setProperty("user", "me");
 p.setProperty("password", "secret");
-p.setProperty("implementation", "mina");   // or "jsch"
+p.setProperty("implementation", "mina");   // or "jsch", "bjl"
 factory.setConnectionProperties(p);
 ```
 
 or for the whole JVM with a system property:
 
 ```
-java -Dbjl.sftp.implementation=mina ...
+java -Dbjl.sftp.implementation=mina ...   (or jsch, bjl)
 ```
 
-A factory's own setting wins over the system property. Both libraries behave the same through `FileSource`. With MINA, random access reads and writes at any position in one request each. JSch has no safe way to write at a position, so random access that can write (`rw`, `rws`, `rwd`) goes through a MINA connection to the same account even when JSch is chosen; reading stays on JSch.
+A factory's own setting wins over the system property. All three behave the same through `FileSource`. With MINA and BJL, random access reads and writes at any position in one request each. JSch has no safe way to write at a position, so random access that can write (`rw`, `rws`, `rwd`) goes through a MINA connection to the same account even when JSch is chosen; reading stays on JSch.
 
 Code that needs to talk to the server directly can use the library-neutral interface in `us.bringardner.io.filesource.sftp.client` (`SshProviders`, `SshConnection`, `SftpChannel`, `SftpFile`).
 

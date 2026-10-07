@@ -44,11 +44,13 @@ public class SftpBatch20Test {
 
 	static SftpFileSourceFactory jsch;
 	static SftpFileSourceFactory mina;
+	static SftpFileSourceFactory bjl;
 
 	@BeforeAll
 	static void setUp() throws IOException {
 		jsch = TestServer.connect("jsch");
 		mina = TestServer.connect("mina");
+		bjl = TestServer.connect("bjl");
 		FileSource dir = jsch.createFileSource(DIR);
 		if( !dir.exists()) {
 			assertTrue(dir.mkdirs(), "Can't create "+dir);
@@ -60,6 +62,9 @@ public class SftpBatch20Test {
 		if( mina != null ) {
 			mina.disConnect();
 		}
+		if( bjl != null ) {
+			bjl.disConnect();
+		}
 		if( jsch != null ) {
 			SftpRandomAccessTest.deleteAll(jsch.createFileSource(DIR));
 			jsch.disConnect();
@@ -67,7 +72,7 @@ public class SftpBatch20Test {
 	}
 
 	static SftpFileSourceFactory factory(String impl) {
-		return impl.equals("jsch") ? jsch : mina;
+		return impl.equals("jsch") ? jsch : impl.equals("mina") ? mina : bjl;
 	}
 
 	/** A connected factory with a connection of its own; 'key' null makes one up. */
@@ -92,7 +97,7 @@ public class SftpBatch20Test {
 	 * asked to go (or failed). Every write here is read back from the server.
 	 */
 	@ParameterizedTest
-	@ValueSource(strings = {"jsch", "mina"})
+	@ValueSource(strings = {"jsch", "mina", "bjl"})
 	void writesLandWhereAskedWhileTheSizeChanges(String impl) throws Exception {
 		String path = zeros(impl, "race.bin", 4096);
 		AtomicBoolean stop = new AtomicBoolean();

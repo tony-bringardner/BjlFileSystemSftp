@@ -20,7 +20,8 @@ BjlFileSystemFtp, BjlFileSystemJdbc. They live next to this repo in
 
 ## Building and testing
 
-- `mvn package` runs the whole suite. At batch 22 that was 251 tests.
+- `mvn package` runs the whole suite. At batch 22 that was 251 tests; at
+  batch 23, 366 (the library-parameterized tests run with bjl too).
 - `TestServer` picks the server once per run, by `-Dbjl.sftp.test.server`:
   - `auto` (the default) uses OpenSSH on **localhost:22** if `unittest1` /
     `0000` can log in, otherwise the embedded server.
@@ -45,7 +46,8 @@ BjlFileSystemFtp, BjlFileSystemJdbc. They live next to this repo in
 - `TestSftpRandomAccessIoController` (port 2222) and `SftpCanonicalPathTest`
   (port 2224) start their own embedded servers.
 - Pick the SSH library for a run with `-Dbjl.sftp.implementation=jsch` (the
-  default) or `=mina`. Most new tests are parameterized to run with both.
+  default), `=mina` or `=bjl`. Most new tests are parameterized to run with
+  all three.
 - The core libraries are SNAPSHOT versions. If a build can't find them, run
   `mvn install` in BjlCore, BjlIo and BjlFileSystem first.
 
@@ -87,7 +89,10 @@ BjlFileSystemFtp, BjlFileSystemJdbc. They live next to this repo in
   - `client/jsch/` uses the maintained JSch fork, `com.github.mwiede:jsch`.
   - `client/mina/` uses Apache MINA SSHD, `sshd-sftp`. MINA also needs
     `net.i2p.crypto:eddsa` for Ed25519 keys and known_hosts entries.
-  - Code outside `client/` must not use either library directly.
+  - `client/bjl/` uses BJL's own SSH library, `us.bringardner:bjl_net_ssh`
+    (the BjlSsh repo). It needs `mvn install` in BjlSsh (and BjlNetFramework)
+    first while they're SNAPSHOTs.
+  - Code outside `client/` must not use any of the libraries directly.
 - Errors: a missing file is `NoSuchFileException`, a refused permission is
   `AccessDeniedException`. Opening for random access turns both into
   `FileNotFoundException`, as `RandomAccessFile` does.
@@ -121,7 +126,8 @@ The full review is in the claude.ai project "FileSystem", in
 - **Batch 19 is merged** (below).
 - **Batch 20 is merged** (below).
 - **Batch 21 is merged** (below).
-- **Batch 22 is on its branch, not merged yet** (below).
+- **Batch 22 is merged** (below).
+- **Batch 23 is on its branch, not merged yet** (below).
 - **Skipped, Tony's call:** #18, one MINA `SshClient` for all connections.
   Measured: no difference in connect time (about 260 ms, nearly all login)
   or transfer speed; it saves about 9 idle threads per MINA connection on a
@@ -369,3 +375,29 @@ The full review is in the claude.ai project "FileSystem", in
   random-access write through MINA) with the server's key in known_hosts.
   The key comes from `ssh-keyscan`, or, when that finds nothing (the
   embedded server), from a MINA key exchange that records it.
+
+
+## Batch 23: a third SSH library, BJL's own (`fix/sftp-review-23`)
+
+- `implementation=bjl` (or `-Dbjl.sftp.implementation=bjl`) uses
+  `us.bringardner:bjl_net_ssh`, BJL's own SSH client (BjlSsh): no third party
+  code. `client/bjl/` maps `SftpChannel` and friends onto its `SftpClient`,
+  the same way `client/mina/` does onto MINA's: the same errors
+  (`NoSuchFileException`, `AccessDeniedException`), `replace` with
+  `posix-rename@openssh.com`, `createNew` with one exclusive open, chmod /
+  chown / times keeping the other attributes, and close waiting up to 10 s for
+  the server to confirm (OpenSSH's 10-channel limit).
+- Its streams keep up to 16 requests of 32 KB in flight (reads start at 2 and
+  double); random access reads use the same read-ahead from the position.
+  Host keys: `KnownHosts` on the same file with `strictHostKeyChecking`;
+  keepalives answer like OpenSSH's `ServerAliveCountMax` 3.
+- `randomAccessFactory()`: a BJL factory uses itself, like MINA. BJL writes at
+  an offset in one request; before, every library but MINA got a MINA
+  companion for random-access writes.
+- Tests: `SftpBatch23Test`; every test parameterized by library now also runs
+  with "bjl" (each class has its own `bjl` factory). The whole suite passed
+  with `-Dbjl.sftp.implementation=bjl` against OpenSSH on localhost (259 tests).
+- `libraryThreadsDoNotKeepTheProgramAlive` ignores threads named "AWT-...":
+  the JDK's AWT-Shutdown thread comes and goes after the Swing panel test and
+  failed the check now and then (twice in this batch, once with JSch).
+

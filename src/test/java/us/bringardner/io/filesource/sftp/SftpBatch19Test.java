@@ -44,11 +44,13 @@ public class SftpBatch19Test {
 
 	static SftpFileSourceFactory jsch;
 	static SftpFileSourceFactory mina;
+	static SftpFileSourceFactory bjl;
 
 	@BeforeAll
 	static void setUp() throws IOException {
 		jsch = TestServer.connect("jsch");
 		mina = TestServer.connect("mina");
+		bjl = TestServer.connect("bjl");
 		FileSource dir = jsch.createFileSource(DIR);
 		if( !dir.exists()) {
 			assertTrue(dir.mkdirs(), "Can't create "+dir);
@@ -60,6 +62,9 @@ public class SftpBatch19Test {
 		if( mina != null ) {
 			mina.disConnect();
 		}
+		if( bjl != null ) {
+			bjl.disConnect();
+		}
 		if( jsch != null ) {
 			SftpRandomAccessTest.deleteAll(jsch.createFileSource(DIR));
 			jsch.disConnect();
@@ -67,7 +72,7 @@ public class SftpBatch19Test {
 	}
 
 	static SftpFileSourceFactory factory(String impl) {
-		return impl.equals("jsch") ? jsch : mina;
+		return impl.equals("jsch") ? jsch : impl.equals("mina") ? mina : bjl;
 	}
 
 	/** An empty directory for one test, and its absolute path. */
@@ -144,7 +149,7 @@ public class SftpBatch19Test {
 	 * trips; now about 5.
 	 */
 	@ParameterizedTest
-	@ValueSource(strings = {"jsch", "mina"})
+	@ValueSource(strings = {"jsch", "mina", "bjl"})
 	void callsFromDifferentThreadsRunTogether(String impl) throws Exception {
 		List<String> paths = files(freshDir(impl, "parallel"), 4);
 		try (SftpReadAheadTest.DelayProxy proxy = new SftpReadAheadTest.DelayProxy(TestServer.port(), SftpReadAheadTest.DELAY_MS)) {
@@ -172,7 +177,7 @@ public class SftpBatch19Test {
 	 * for missing files must not close channels and open new ones.
 	 */
 	@ParameterizedTest
-	@ValueSource(strings = {"jsch", "mina"})
+	@ValueSource(strings = {"jsch", "mina", "bjl"})
 	void missingFileChecksKeepTheirChannel(String impl) throws IOException {
 		SftpFileSourceFactory f = factory(impl);
 		String d = freshDir(impl, "missing");
@@ -191,7 +196,7 @@ public class SftpBatch19Test {
 	 * OpenSSH allows (10), so the later ones couldn't connect.
 	 */
 	@ParameterizedTest
-	@ValueSource(strings = {"jsch", "mina"})
+	@ValueSource(strings = {"jsch", "mina", "bjl"})
 	void idleFactoriesHoldNoChannels(String impl) throws Exception {
 		TestServer.assumeOpenSsh();
 		List<String> paths = files(freshDir(impl, "copies"), 1);
@@ -223,7 +228,7 @@ public class SftpBatch19Test {
 
 	/** However many threads, no more than maxChannels channels are ever open. */
 	@ParameterizedTest
-	@ValueSource(strings = {"jsch", "mina"})
+	@ValueSource(strings = {"jsch", "mina", "bjl"})
 	void limitIsNeverExceeded(String impl) throws Exception {
 		List<String> paths = files(freshDir(impl, "limit"), 4);
 		SftpFileSourceFactory f = own(impl, TestServer.port(), 4, 30_000L);
@@ -261,7 +266,7 @@ public class SftpBatch19Test {
 	 * fails with a message that says why.
 	 */
 	@ParameterizedTest
-	@ValueSource(strings = {"jsch", "mina"})
+	@ValueSource(strings = {"jsch", "mina", "bjl"})
 	void streamsLeaveRoomForCalls(String impl) throws Exception {
 		List<String> paths = files(freshDir(impl, "room"), 1);
 		String path = paths.get(0);
@@ -290,7 +295,7 @@ public class SftpBatch19Test {
 
 	/** A stream waiting for a channel gets the first one given back. */
 	@ParameterizedTest
-	@ValueSource(strings = {"jsch", "mina"})
+	@ValueSource(strings = {"jsch", "mina", "bjl"})
 	void aWaitingStreamGetsTheNextChannelBack(String impl) throws Exception {
 		List<String> paths = files(freshDir(impl, "wait"), 1);
 		String path = paths.get(0);
@@ -321,7 +326,7 @@ public class SftpBatch19Test {
 	 * refused by the server.
 	 */
 	@ParameterizedTest
-	@ValueSource(strings = {"jsch", "mina"})
+	@ValueSource(strings = {"jsch", "mina", "bjl"})
 	void aCommandWaitsForASlot(String impl) throws Exception {
 		TestServer.assumeOpenSsh();
 		List<String> paths = files(freshDir(impl, "command"), 1);
@@ -400,7 +405,7 @@ public class SftpBatch19Test {
 
 	/** The connection's pool uses the factory's settings. */
 	@ParameterizedTest
-	@ValueSource(strings = {"jsch", "mina"})
+	@ValueSource(strings = {"jsch", "mina", "bjl"})
 	void thePoolUsesTheSettings(String impl) throws IOException {
 		SftpFileSourceFactory f = own(impl, TestServer.port(), 5, null);
 		try {

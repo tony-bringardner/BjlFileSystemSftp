@@ -51,11 +51,13 @@ public class SftpBatch17Test {
 
 	static SftpFileSourceFactory jsch;
 	static SftpFileSourceFactory mina;
+	static SftpFileSourceFactory bjl;
 
 	@BeforeAll
 	static void setUp() throws IOException {
 		jsch = TestServer.connect("jsch");
 		mina = TestServer.connect("mina");
+		bjl = TestServer.connect("bjl");
 		FileSource dir = jsch.createFileSource(DIR);
 		if( !dir.exists()) {
 			assertTrue(dir.mkdirs(), "Can't create "+dir);
@@ -67,6 +69,9 @@ public class SftpBatch17Test {
 		if( mina != null ) {
 			mina.disConnect();
 		}
+		if( bjl != null ) {
+			bjl.disConnect();
+		}
 		if( jsch != null ) {
 			SftpRandomAccessTest.deleteAll(jsch.createFileSource(DIR));
 			jsch.disConnect();
@@ -74,7 +79,7 @@ public class SftpBatch17Test {
 	}
 
 	static SftpFileSourceFactory factory(String impl) {
-		return impl.equals("jsch") ? jsch : mina;
+		return impl.equals("jsch") ? jsch : impl.equals("mina") ? mina : bjl;
 	}
 
 	/** An empty directory for one test, and its absolute path. */
@@ -141,7 +146,7 @@ public class SftpBatch17Test {
 
 	/** JSch read the output until EOF before checking the time, so a hung command blocked forever. */
 	@ParameterizedTest
-	@ValueSource(strings = {"jsch", "mina"})
+	@ValueSource(strings = {"jsch", "mina", "bjl"})
 	void commandTimeLimitHoldsWhileOutputIsOpen(String impl) {
 		TestServer.assumeOpenSsh();
 		SftpFileSourceFactory f = factory(impl);
@@ -153,7 +158,7 @@ public class SftpBatch17Test {
 
 	/** Reading only what has arrived still collects all of a command's output. */
 	@ParameterizedTest
-	@ValueSource(strings = {"jsch", "mina"})
+	@ValueSource(strings = {"jsch", "mina", "bjl"})
 	void commandOutputIsComplete(String impl) throws IOException {
 		TestServer.assumeOpenSsh();
 		SftpFileSourceFactory f = factory(impl);
@@ -190,7 +195,7 @@ public class SftpBatch17Test {
 
 	/** Opening a stream to read used to throw the cached attributes away, costing a stat afterwards. */
 	@ParameterizedTest
-	@ValueSource(strings = {"jsch", "mina"})
+	@ValueSource(strings = {"jsch", "mina", "bjl"})
 	void readingKeepsCachedAttributes(String impl) throws IOException {
 		String d = freshDir(impl, "keep-attrs");
 		SftpRegressionTest.write(factory(impl).createFileSource(d+"/x.txt"), "hello".getBytes("UTF-8"));
@@ -219,7 +224,7 @@ public class SftpBatch17Test {
 
 	/** Several default-size chunks, written and read back through random access and a seekable stream. */
 	@ParameterizedTest
-	@ValueSource(strings = {"jsch", "mina"})
+	@ValueSource(strings = {"jsch", "mina", "bjl"})
 	void defaultChunksRoundTrip(String impl) throws Exception {
 		SftpFileSourceFactory f = factory(impl);
 		assertEquals(SftpFileSourceFactory.DEFAULT_CHUNK_SIZE, f.getChunkSize());
@@ -254,7 +259,7 @@ public class SftpBatch17Test {
 
 	/** An owner no listing could name made every file with that owner list its directory again. */
 	@ParameterizedTest
-	@ValueSource(strings = {"jsch", "mina"})
+	@ValueSource(strings = {"jsch", "mina", "bjl"})
 	void unknownOwnerIsLookedUpOnce(String impl) throws IOException {
 		String d = freshDir(impl, "owner");
 		SftpRegressionTest.write(factory(impl).createFileSource(d+"/a.txt"), new byte[1]);
@@ -282,7 +287,7 @@ public class SftpBatch17Test {
 
 	/** Every factory on a connection ran "id" for itself; now the connection remembers the answer. */
 	@ParameterizedTest
-	@ValueSource(strings = {"jsch", "mina"})
+	@ValueSource(strings = {"jsch", "mina", "bjl"})
 	void remoteUserIsWorkedOutOncePerConnection(String impl) throws IOException {
 		AtomicInteger commands = new AtomicInteger();
 		CountingFactory f1 = new CountingFactory(impl, commands);
@@ -307,7 +312,7 @@ public class SftpBatch17Test {
 	 * "connected".
 	 */
 	@ParameterizedTest
-	@ValueSource(strings = {"jsch", "mina"})
+	@ValueSource(strings = {"jsch", "mina", "bjl"})
 	void silentConnectionIsDropped(String impl) throws Exception {
 		try (SftpReadAheadTest.DelayProxy proxy = new SftpReadAheadTest.DelayProxy(TestServer.port(), 0)) {
 			SftpFileSourceFactory f = new SftpFileSourceFactory();
@@ -360,7 +365,7 @@ public class SftpBatch17Test {
 
 	/** A read-only call whose channel drops is tried again on a new channel. */
 	@ParameterizedTest
-	@ValueSource(strings = {"jsch", "mina"})
+	@ValueSource(strings = {"jsch", "mina", "bjl"})
 	void readOnlyCallIsRetriedAfterADroppedChannel(String impl) throws Exception {
 		String d = freshDir(impl, "retry");
 		SftpRegressionTest.write(jsch.createFileSource(d+"/x.txt"), "hello".getBytes("UTF-8"));
@@ -377,7 +382,7 @@ public class SftpBatch17Test {
 
 	/** A change isn't retried: the first attempt may have reached the server. */
 	@ParameterizedTest
-	@ValueSource(strings = {"jsch", "mina"})
+	@ValueSource(strings = {"jsch", "mina", "bjl"})
 	void changeIsNotRetried(String impl) throws Exception {
 		String d = freshDir(impl, "no-retry");
 		SftpFileSourceFactory f = TestServer.connect(impl);

@@ -33,11 +33,13 @@ public class SftpCacheTest {
 	static final String DIR = "SftpCacheTest";
 	static SftpFileSourceFactory jsch;
 	static SftpFileSourceFactory mina;
+	static SftpFileSourceFactory bjl;
 
 	@BeforeAll
 	static void setUp() throws IOException {
 		jsch = SftpRandomAccessTest.connect("jsch");
 		mina = SftpRandomAccessTest.connect("mina");
+		bjl = SftpRandomAccessTest.connect("bjl");
 		FileSource dir = jsch.createFileSource(DIR);
 		if( !dir.exists()) {
 			assertTrue(dir.mkdirs());
@@ -53,10 +55,13 @@ public class SftpCacheTest {
 		if( mina != null ) {
 			mina.disConnect();
 		}
+		if( bjl != null ) {
+			bjl.disConnect();
+		}
 	}
 
 	static SftpFileSourceFactory mine(String impl) {
-		return impl.equals("jsch") ? jsch : mina;
+		return impl.equals("jsch") ? jsch : impl.equals("mina") ? mina : bjl;
 	}
 
 	static SftpFileSourceFactory other(String impl) {
@@ -91,7 +96,7 @@ public class SftpCacheTest {
 	// ------------------------------------------------------------ listings
 
 	@ParameterizedTest
-	@ValueSource(strings = {"jsch", "mina"})
+	@ValueSource(strings = {"jsch", "mina", "bjl"})
 	void listingSeesChangesMadeElsewhere(String impl) throws IOException {
 		String d = freshDir(impl, "list");
 		FileSource dir = mine(impl).createFileSource(d);
@@ -113,7 +118,7 @@ public class SftpCacheTest {
 	}
 
 	@ParameterizedTest
-	@ValueSource(strings = {"jsch", "mina"})
+	@ValueSource(strings = {"jsch", "mina", "bjl"})
 	void listedChildrenCarryFreshAttributes(String impl) throws IOException {
 		String d = freshDir(impl, "attrs");
 		FileSource dir = mine(impl).createFileSource(d);
@@ -130,7 +135,7 @@ public class SftpCacheTest {
 	// ------------------------------------------------------------ attribute cache time
 
 	@ParameterizedTest
-	@ValueSource(strings = {"jsch", "mina"})
+	@ValueSource(strings = {"jsch", "mina", "bjl"})
 	void ttlZeroAlwaysAsksTheServer(String impl) throws IOException {
 		SftpFileSourceFactory f = mine(impl);
 		long old = f.getAttributeCacheTtl();
@@ -153,7 +158,7 @@ public class SftpCacheTest {
 	}
 
 	@ParameterizedTest
-	@ValueSource(strings = {"jsch", "mina"})
+	@ValueSource(strings = {"jsch", "mina", "bjl"})
 	void cachedUntilTheTimeRunsOut(String impl) throws Exception {
 		SftpFileSourceFactory f = mine(impl);
 		long old = f.getAttributeCacheTtl();
@@ -174,7 +179,7 @@ public class SftpCacheTest {
 	}
 
 	@ParameterizedTest
-	@ValueSource(strings = {"jsch", "mina"})
+	@ValueSource(strings = {"jsch", "mina", "bjl"})
 	void negativeKeepsUntilRefresh(String impl) throws Exception {
 		SftpFileSourceFactory f = mine(impl);
 		long old = f.getAttributeCacheTtl();
@@ -196,7 +201,7 @@ public class SftpCacheTest {
 	}
 
 	@ParameterizedTest
-	@ValueSource(strings = {"jsch", "mina"})
+	@ValueSource(strings = {"jsch", "mina", "bjl"})
 	void ownChangesAreSeenWhateverTheTime(String impl) throws IOException {
 		SftpFileSourceFactory f = mine(impl);
 		long old = f.getAttributeCacheTtl();
@@ -263,7 +268,7 @@ public class SftpCacheTest {
 	}
 
 	@ParameterizedTest
-	@ValueSource(strings = {"jsch", "mina"})
+	@ValueSource(strings = {"jsch", "mina", "bjl"})
 	void listFilesOfAFileIsNull(String impl) throws IOException {
 		String d = freshDir(impl, "file");
 		FileSource x = mine(impl).createFileSource(d+"/x.bin");

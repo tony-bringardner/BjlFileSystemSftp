@@ -14,10 +14,12 @@ import us.bringardner.io.filesource.sftp.client.mina.MinaProvider;
  */
 public final class SshProviders {
 
-	/** System property naming the default implementation: jsch or mina. */
+	/** System property naming the default implementation: jsch, mina or bjl. */
 	public static final String SYSTEM_PROPERTY = "bjl.sftp.implementation";
 	public static final String JSCH = "jsch";
 	public static final String MINA = "mina";
+	/** The BJL SSH library (bjl_net_ssh), no third party code */
+	public static final String BJL = "bjl";
 	public static final String DEFAULT = JSCH;
 
 	private SshProviders() {
@@ -56,7 +58,7 @@ public final class SshProviders {
 	}
 
 	/**
-	 * @param name "jsch" or "mina" (case-insensitive); null or empty for the default
+	 * @param name "jsch", "mina" or "bjl" (case-insensitive); null or empty for the default
 	 * @throws IllegalArgumentException for any other name
 	 */
 	public static SshProvider get(String name) {
@@ -66,8 +68,9 @@ public final class SshProviders {
 		switch (name.trim().toLowerCase(Locale.ROOT)) {
 		case JSCH: return new JschProvider();
 		case MINA: return new MinaProvider();
+		case BJL: return new us.bringardner.io.filesource.sftp.client.bjl.BjlProvider();
 		default:
-			throw new IllegalArgumentException("Unknown SFTP implementation '"+name+"'; use "+JSCH+" or "+MINA);
+			throw new IllegalArgumentException("Unknown SFTP implementation '"+name+"'; use "+JSCH+", "+MINA+" or "+BJL);
 		}
 	}
 }

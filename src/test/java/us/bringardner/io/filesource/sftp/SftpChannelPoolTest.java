@@ -44,6 +44,7 @@ public class SftpChannelPoolTest {
 	static final String DIR = "SftpChannelPoolTest";
 	static SftpFileSourceFactory jsch;
 	static SftpFileSourceFactory mina;
+	static SftpFileSourceFactory bjl;
 
 	static SftpFileSourceFactory connect(String implementation) throws IOException {
 		return TestServer.connect(implementation);
@@ -53,6 +54,7 @@ public class SftpChannelPoolTest {
 	static void setUp() throws IOException {
 		jsch = connect("jsch");
 		mina = connect("mina");
+		bjl = connect("bjl");
 		FileSource dir = jsch.createFileSource(DIR);
 		if( !dir.exists()) {
 			assertTrue(dir.mkdirs(), "Can't create "+dir);
@@ -64,6 +66,9 @@ public class SftpChannelPoolTest {
 		if( mina != null ) {
 			mina.disConnect();
 		}
+		if( bjl != null ) {
+			bjl.disConnect();
+		}
 		if( jsch != null ) {
 			SftpRandomAccessTest.deleteAll(jsch.createFileSource(DIR));
 			jsch.disConnect();
@@ -71,7 +76,7 @@ public class SftpChannelPoolTest {
 	}
 
 	static SftpFileSourceFactory factory(String implementation) {
-		return implementation.equals("jsch") ? jsch : mina;
+		return implementation.equals("jsch") ? jsch : implementation.equals("mina") ? mina : bjl;
 	}
 
 	static FileSource file(SftpFileSourceFactory f, String name) throws IOException {
@@ -97,7 +102,7 @@ public class SftpChannelPoolTest {
 	}
 
 	@ParameterizedTest
-	@ValueSource(strings = {"jsch", "mina"})
+	@ValueSource(strings = {"jsch", "mina", "bjl"})
 	void fiftyStreamsInARowOpenFewChannels(String impl) throws IOException {
 		SftpFileSourceFactory f = factory(impl);
 		FileSource file = file(f, "fifty.txt");
@@ -149,7 +154,7 @@ public class SftpChannelPoolTest {
 	}
 
 	@ParameterizedTest
-	@ValueSource(strings = {"jsch", "mina"})
+	@ValueSource(strings = {"jsch", "mina", "bjl"})
 	void fifteenStreamsInARowStayUnderTheChannelLimit(String impl) throws IOException {
 		// OpenSSH allows 10 channels per connection by default
 		SftpFileSourceFactory f = factory(impl);
@@ -167,7 +172,7 @@ public class SftpChannelPoolTest {
 	}
 
 	@ParameterizedTest
-	@ValueSource(strings = {"jsch", "mina"})
+	@ValueSource(strings = {"jsch", "mina", "bjl"})
 	void keepsAtMostMaxIdleChannels(String impl) throws IOException {
 		SftpFileSourceFactory f = factory(impl);
 		FileSource file = file(f, "six.txt");
@@ -190,7 +195,7 @@ public class SftpChannelPoolTest {
 	}
 
 	@ParameterizedTest
-	@ValueSource(strings = {"jsch", "mina"})
+	@ValueSource(strings = {"jsch", "mina", "bjl"})
 	void aBorrowedChannelLeavesThePool(String impl) throws IOException {
 		SftpFileSourceFactory f = factory(impl);
 		SftpChannelPool pool = f.channelPool();
@@ -214,7 +219,7 @@ public class SftpChannelPoolTest {
 	}
 
 	@ParameterizedTest
-	@ValueSource(strings = {"jsch", "mina"})
+	@ValueSource(strings = {"jsch", "mina", "bjl"})
 	void closeThenOpenAtTheChannelLimit(String impl) throws IOException {
 		TestServer.assumeOpenSsh();
 		// OpenSSH's default limit is 10: the pool's channels and these
@@ -238,7 +243,7 @@ public class SftpChannelPoolTest {
 	}
 
 	@ParameterizedTest
-	@ValueSource(strings = {"jsch", "mina"})
+	@ValueSource(strings = {"jsch", "mina", "bjl"})
 	void eightThreadsAtOnceGetTheirOwnData(String impl) throws Exception {
 		SftpFileSourceFactory f = factory(impl);
 		ExecutorService pool = Executors.newFixedThreadPool(8);
@@ -283,7 +288,7 @@ public class SftpChannelPoolTest {
 	}
 
 	@ParameterizedTest
-	@ValueSource(strings = {"jsch", "mina"})
+	@ValueSource(strings = {"jsch", "mina", "bjl"})
 	void aRefusedOpenKeepsItsChannel(String impl) throws IOException {
 		// Batch 19: "permission denied" and "no such file" are the server's
 		// answer to the open, so nothing is left pending and the channel goes
@@ -326,7 +331,7 @@ public class SftpChannelPoolTest {
 	}
 
 	@ParameterizedTest
-	@ValueSource(strings = {"jsch", "mina"})
+	@ValueSource(strings = {"jsch", "mina", "bjl"})
 	void aStreamLeftOpenKeepsItsChannelOutOfThePool(String impl) throws IOException {
 		SftpFileSourceFactory f = factory(impl);
 		SftpChannelPool pool = f.channelPool();
@@ -346,7 +351,7 @@ public class SftpChannelPoolTest {
 	}
 
 	@ParameterizedTest
-	@ValueSource(strings = {"jsch", "mina"})
+	@ValueSource(strings = {"jsch", "mina", "bjl"})
 	void disconnectClosesTheIdleChannels(String impl) throws IOException {
 		SftpFileSourceFactory f = connect(impl);
 		// its own session: a different session key from the shared factories

@@ -43,6 +43,7 @@ public class SftpRandomAccessTest {
 	static final String DIR = "SftpRandomAccessTest";
 	static SftpFileSourceFactory jsch;
 	static SftpFileSourceFactory mina;
+	static SftpFileSourceFactory bjl;
 
 	static SftpFileSourceFactory connect(String implementation) throws IOException {
 		return TestServer.connect(implementation);
@@ -52,6 +53,7 @@ public class SftpRandomAccessTest {
 	static void setUp() throws IOException {
 		jsch = connect("jsch");
 		mina = connect("mina");
+		bjl = connect("bjl");
 		FileSource dir = jsch.createFileSource(DIR);
 		if( !dir.exists()) {
 			assertTrue(dir.mkdirs(), "Can't create "+dir);
@@ -67,6 +69,9 @@ public class SftpRandomAccessTest {
 		if( mina != null ) {
 			mina.disConnect();
 		}
+		if( bjl != null ) {
+			bjl.disConnect();
+		}
 	}
 
 	static void deleteAll(FileSource f) throws IOException {
@@ -79,7 +84,7 @@ public class SftpRandomAccessTest {
 	}
 
 	static SftpFileSourceFactory factory(String implementation) {
-		return implementation.equals("jsch") ? jsch : mina;
+		return implementation.equals("jsch") ? jsch : implementation.equals("mina") ? mina : bjl;
 	}
 
 	/** A fresh file for one test; any old copy is removed. */
@@ -117,7 +122,7 @@ public class SftpRandomAccessTest {
 	// ------------------------------------------------------------ random access
 
 	@ParameterizedTest
-	@ValueSource(strings = {"jsch", "mina"})
+	@ValueSource(strings = {"jsch", "mina", "bjl"})
 	void rwCreatesWritesSeeksAndReads(String impl) throws IOException {
 		FileSource f = file(impl, "rw.bin");
 		assertFalse(f.exists());
@@ -144,7 +149,7 @@ public class SftpRandomAccessTest {
 	}
 
 	@ParameterizedTest
-	@ValueSource(strings = {"jsch", "mina"})
+	@ValueSource(strings = {"jsch", "mina", "bjl"})
 	void rwOverwritesInPlace(String impl) throws IOException {
 		FileSource f = write(impl, "patch.txt", "Hello, world!".getBytes("UTF-8"));
 		try (IRandomAccessStream r = f.getRandomAccessStream("rw")) {
@@ -155,7 +160,7 @@ public class SftpRandomAccessTest {
 	}
 
 	@ParameterizedTest
-	@ValueSource(strings = {"jsch", "mina"})
+	@ValueSource(strings = {"jsch", "mina", "bjl"})
 	void setLengthShrinksAndGrows(String impl) throws IOException {
 		FileSource f = write(impl, "len.bin", data(5000));
 		try (IRandomAccessStream r = f.getRandomAccessStream("rw")) {
@@ -172,7 +177,7 @@ public class SftpRandomAccessTest {
 	}
 
 	@ParameterizedTest
-	@ValueSource(strings = {"jsch", "mina"})
+	@ValueSource(strings = {"jsch", "mina", "bjl"})
 	void readOnlyModeReadsButCannotWrite(String impl) throws IOException {
 		FileSource f = write(impl, "ro.bin", data(300));
 		try (IRandomAccessStream r = f.getRandomAccessStream("r")) {
@@ -185,7 +190,7 @@ public class SftpRandomAccessTest {
 	}
 
 	@ParameterizedTest
-	@ValueSource(strings = {"jsch", "mina"})
+	@ValueSource(strings = {"jsch", "mina", "bjl"})
 	void openErrorsLikeRandomAccessFile(String impl) throws IOException {
 		FileSource missing = file(impl, "missing.bin");
 		assertThrows(FileNotFoundException.class, () -> missing.getRandomAccessStream("r"));
@@ -200,7 +205,7 @@ public class SftpRandomAccessTest {
 	}
 
 	@ParameterizedTest
-	@ValueSource(strings = {"jsch", "mina"})
+	@ValueSource(strings = {"jsch", "mina", "bjl"})
 	void randomBinaryMatchesAfterManyWrites(String impl) throws IOException {
 		byte[] expected = new byte[200_000];
 		new Random(42).nextBytes(expected);
@@ -231,7 +236,7 @@ public class SftpRandomAccessTest {
 	// ------------------------------------------------------------ seekable input
 
 	@ParameterizedTest
-	@ValueSource(strings = {"jsch", "mina"})
+	@ValueSource(strings = {"jsch", "mina", "bjl"})
 	void seekableReadsUnsignedBytesAndSeeks(String impl) throws IOException {
 		byte[] all = data(100_000);
 		FileSource f = write(impl, "seek.bin", all);
@@ -272,7 +277,7 @@ public class SftpRandomAccessTest {
 	}
 
 	@ParameterizedTest
-	@ValueSource(strings = {"jsch", "mina"})
+	@ValueSource(strings = {"jsch", "mina", "bjl"})
 	void seekableInputStreamViewSharesThePointer(String impl) throws IOException {
 		byte[] all = new byte[1000];
 		new Random(7).nextBytes(all);
@@ -294,7 +299,7 @@ public class SftpRandomAccessTest {
 	}
 
 	@ParameterizedTest
-	@ValueSource(strings = {"jsch", "mina"})
+	@ValueSource(strings = {"jsch", "mina", "bjl"})
 	void seekableOpenErrors(String impl) throws IOException {
 		FileSource missing = file(impl, "nothere.bin");
 		assertThrows(FileNotFoundException.class, missing::getSeekableInputStream);
@@ -308,7 +313,7 @@ public class SftpRandomAccessTest {
 	// ------------------------------------------------------------ java.nio
 
 	@ParameterizedTest
-	@ValueSource(strings = {"jsch", "mina"})
+	@ValueSource(strings = {"jsch", "mina", "bjl"})
 	void nioByteChannelReadWrite(String impl) throws IOException {
 		FileSource f = write(impl, "nio.txt", "0123456789".getBytes("UTF-8"));
 		Path p = new FileSourcePath(f);

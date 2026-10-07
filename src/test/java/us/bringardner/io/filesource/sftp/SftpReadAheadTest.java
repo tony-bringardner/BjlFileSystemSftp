@@ -50,9 +50,11 @@ public class SftpReadAheadTest {
 
 	static SftpFileSourceFactory jsch;
 	static SftpFileSourceFactory mina;
+	static SftpFileSourceFactory bjl;
 	static DelayProxy proxy;
 	static SftpFileSourceFactory slowJsch;
 	static SftpFileSourceFactory slowMina;
+	static SftpFileSourceFactory slowBjl;
 
 	static SftpFileSourceFactory connect(String implementation, int port) throws IOException {
 		return TestServer.connect(implementation, port);
@@ -62,11 +64,13 @@ public class SftpReadAheadTest {
 	static void setUp() throws IOException {
 		jsch = TestServer.connect("jsch");
 		mina = TestServer.connect("mina");
+		bjl = TestServer.connect("bjl");
 		proxy = new DelayProxy(TestServer.port(), DELAY_MS);
 		slowJsch = connect("jsch", proxy.port());
 		slowMina = connect("mina", proxy.port());
+		slowBjl = connect("bjl", proxy.port());
 		// these tests count chunks of CHUNK bytes, not the default size
-		for (SftpFileSourceFactory f : new SftpFileSourceFactory[] {jsch, mina, slowJsch, slowMina}) {
+		for (SftpFileSourceFactory f : new SftpFileSourceFactory[] {jsch, mina, bjl, slowJsch, slowMina, slowBjl}) {
 			f.setChunkSize(CHUNK);
 		}
 		FileSource dir = jsch.createFileSource(DIR);
@@ -77,7 +81,7 @@ public class SftpReadAheadTest {
 
 	@AfterAll
 	static void tearDown() throws IOException {
-		for (SftpFileSourceFactory f : new SftpFileSourceFactory[] {slowJsch, slowMina, mina}) {
+		for (SftpFileSourceFactory f : new SftpFileSourceFactory[] {slowJsch, slowMina, slowBjl, mina, bjl}) {
 			if( f != null ) {
 				f.disConnect();
 			}
@@ -92,11 +96,11 @@ public class SftpReadAheadTest {
 	}
 
 	static SftpFileSourceFactory factory(String implementation) {
-		return implementation.equals("jsch") ? jsch : mina;
+		return implementation.equals("jsch") ? jsch : implementation.equals("mina") ? mina : bjl;
 	}
 
 	static SftpFileSourceFactory slowFactory(String implementation) {
-		return implementation.equals("jsch") ? slowJsch : slowMina;
+		return implementation.equals("jsch") ? slowJsch : implementation.equals("mina") ? slowMina : slowBjl;
 	}
 
 	static byte[] random(int size, long seed) {
@@ -140,7 +144,7 @@ public class SftpReadAheadTest {
 	// ------------------------------------------------------------ correctness
 
 	@ParameterizedTest
-	@ValueSource(strings = {"jsch", "mina"})
+	@ValueSource(strings = {"jsch", "mina", "bjl"})
 	void seeksForwardAndBackwardReadTheRightBytes(String impl) throws IOException {
 		byte[] data = random(BIG, 1);
 		String path = write(impl, "seek.bin", data);
@@ -158,7 +162,7 @@ public class SftpReadAheadTest {
 	}
 
 	@ParameterizedTest
-	@ValueSource(strings = {"jsch", "mina"})
+	@ValueSource(strings = {"jsch", "mina", "bjl"})
 	void readAfterWriteSeesNewData(String impl) throws IOException {
 		byte[] data = random(BIG, 2);
 		String path = write(impl, "write.bin", data);
@@ -174,7 +178,7 @@ public class SftpReadAheadTest {
 	}
 
 	@ParameterizedTest
-	@ValueSource(strings = {"jsch", "mina"})
+	@ValueSource(strings = {"jsch", "mina", "bjl"})
 	void readAfterTruncateSeesNewLength(String impl) throws IOException {
 		byte[] data = random(BIG, 4);
 		String path = write(impl, "truncate.bin", data);
@@ -189,7 +193,7 @@ public class SftpReadAheadTest {
 	}
 
 	@ParameterizedTest
-	@ValueSource(strings = {"jsch", "mina"})
+	@ValueSource(strings = {"jsch", "mina", "bjl"})
 	void readingToTheEndReturnsMinusOne(String impl) throws IOException {
 		byte[] data = random(5 * CHUNK + 123, 5);
 		String path = write(impl, "eof.bin", data);
@@ -210,7 +214,7 @@ public class SftpReadAheadTest {
 	}
 
 	@ParameterizedTest
-	@ValueSource(strings = {"jsch", "mina"})
+	@ValueSource(strings = {"jsch", "mina", "bjl"})
 	void readAtTheEndSeesTheFileGrow(String impl) throws IOException {
 		byte[] data = random(3 * CHUNK, 6);
 		String path = write(impl, "grow.bin", data);
@@ -228,7 +232,7 @@ public class SftpReadAheadTest {
 	}
 
 	@ParameterizedTest
-	@ValueSource(strings = {"jsch", "mina"})
+	@ValueSource(strings = {"jsch", "mina", "bjl"})
 	void fifteenFilesInARowLeakNoChannels(String impl) throws IOException {
 		// OpenSSH allows 10 channels per connection by default
 		byte[] data = random(10 * CHUNK, 7);
@@ -268,7 +272,7 @@ public class SftpReadAheadTest {
 	}
 
 	@ParameterizedTest
-	@ValueSource(strings = {"jsch", "mina"})
+	@ValueSource(strings = {"jsch", "mina", "bjl"})
 	void sequentialRandomAccessReadIsPipelined(String impl) throws Exception {
 		byte[] data = random(BIG, 8);
 		String path = write(impl, "speed-ras.bin", data);
@@ -287,7 +291,7 @@ public class SftpReadAheadTest {
 	}
 
 	@ParameterizedTest
-	@ValueSource(strings = {"jsch", "mina"})
+	@ValueSource(strings = {"jsch", "mina", "bjl"})
 	void sequentialSeekableReadIsPipelined(String impl) throws IOException {
 		byte[] data = random(BIG, 9);
 		String path = write(impl, "speed-seekable.bin", data);
@@ -317,7 +321,7 @@ public class SftpReadAheadTest {
 	 * for each 32 KB request before sending the next: 64+ round trips here.
 	 */
 	@ParameterizedTest
-	@ValueSource(strings = {"jsch", "mina"})
+	@ValueSource(strings = {"jsch", "mina", "bjl"})
 	void sequentialStreamReadIsPipelined(String impl) throws IOException {
 		byte[] data = random(BIG, 10);
 		String path = write(impl, "speed-stream.bin", data);
@@ -333,7 +337,7 @@ public class SftpReadAheadTest {
 
 	/** Streams from an offset, past the end, of an empty file, and read byte by byte. */
 	@ParameterizedTest
-	@ValueSource(strings = {"jsch", "mina"})
+	@ValueSource(strings = {"jsch", "mina", "bjl"})
 	void streamReadsFromAnyOffset(String impl) throws IOException {
 		byte[] data = random(3 * CHUNK + 100, 11);
 		FileSource f = factory(impl).createFileSource(write(impl, "offsets.bin", data));
@@ -360,7 +364,7 @@ public class SftpReadAheadTest {
 
 	/** Closing a stream early leaves the channel usable for the next one. */
 	@ParameterizedTest
-	@ValueSource(strings = {"jsch", "mina"})
+	@ValueSource(strings = {"jsch", "mina", "bjl"})
 	void streamClosedEarlyThenAnother(String impl) throws IOException {
 		byte[] data = random(BIG, 12);
 		FileSource f = factory(impl).createFileSource(write(impl, "early.bin", data));

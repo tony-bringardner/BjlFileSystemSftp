@@ -45,11 +45,13 @@ public class SftpBatch21Test {
 
 	static SftpFileSourceFactory jsch;
 	static SftpFileSourceFactory mina;
+	static SftpFileSourceFactory bjl;
 
 	@BeforeAll
 	static void setUp() throws IOException {
 		jsch = TestServer.connect("jsch");
 		mina = TestServer.connect("mina");
+		bjl = TestServer.connect("bjl");
 		FileSource dir = jsch.createFileSource(DIR);
 		if( !dir.exists()) {
 			assertTrue(dir.mkdirs(), "Can't create "+dir);
@@ -61,6 +63,9 @@ public class SftpBatch21Test {
 		if( mina != null ) {
 			mina.disConnect();
 		}
+		if( bjl != null ) {
+			bjl.disConnect();
+		}
 		if( jsch != null ) {
 			SftpRandomAccessTest.deleteAll(jsch.createFileSource(DIR));
 			jsch.disConnect();
@@ -68,7 +73,7 @@ public class SftpBatch21Test {
 	}
 
 	static SftpFileSourceFactory factory(String impl) {
-		return impl.equals("jsch") ? jsch : mina;
+		return impl.equals("jsch") ? jsch : impl.equals("mina") ? mina : bjl;
 	}
 
 	/** An empty directory for one test, and its absolute path. */
@@ -120,7 +125,7 @@ public class SftpBatch21Test {
 	 * directory: mkdirs() threw, since mkdir fails on a directory that exists.
 	 */
 	@ParameterizedTest
-	@ValueSource(strings = {"jsch", "mina"})
+	@ValueSource(strings = {"jsch", "mina", "bjl"})
 	void mkdirsSeesADirectoryMadeMeanwhile(String impl) throws IOException {
 		String d = freshDir(impl, "mkdirs");
 		FileSource mine = factory(impl).createFileSource(d+"/a/b");
@@ -135,7 +140,7 @@ public class SftpBatch21Test {
 
 	/** Like java.io.File: a file in the way is "false". It used to say true. */
 	@ParameterizedTest
-	@ValueSource(strings = {"jsch", "mina"})
+	@ValueSource(strings = {"jsch", "mina", "bjl"})
 	void mkdirsOnAFileIsFalse(String impl) throws IOException {
 		String d = freshDir(impl, "mkdirs-file");
 		FileSource f = SftpRegressionTest.write(factory(impl).createFileSource(d+"/x"), bytes("file"));
@@ -155,7 +160,7 @@ public class SftpBatch21Test {
 	 * connection forever, so the connection stayed open until the JVM exited.
 	 */
 	@ParameterizedTest
-	@ValueSource(strings = {"jsch", "mina"})
+	@ValueSource(strings = {"jsch", "mina", "bjl"})
 	void droppedFactoryLetsGoOfItsConnection(String impl) throws Exception {
 		SshConnection c = connectAndDrop(impl);
 		assertTrue(c.isConnected());
@@ -169,7 +174,7 @@ public class SftpBatch21Test {
 
 	/** A factory that's still in use keeps its connection, however often the collector runs. */
 	@ParameterizedTest
-	@ValueSource(strings = {"jsch", "mina"})
+	@ValueSource(strings = {"jsch", "mina", "bjl"})
 	void factoryInUseKeepsItsConnection(String impl) throws Exception {
 		SftpFileSourceFactory f = own(impl);
 		try {
@@ -204,7 +209,7 @@ public class SftpBatch21Test {
 	 * connect again.
 	 */
 	@ParameterizedTest
-	@ValueSource(strings = {"jsch", "mina"})
+	@ValueSource(strings = {"jsch", "mina", "bjl"})
 	void factoriesSerialize(String impl) throws Exception {
 		SftpFileSourceFactory f = own(impl, SftpFileSourceFactory.PROP_MAX_CHANNELS, "6");
 		try {
@@ -229,7 +234,7 @@ public class SftpBatch21Test {
 
 	/** Until close(), readers see the old file; after it, the new one, and no temporary file is left. */
 	@ParameterizedTest
-	@ValueSource(strings = {"jsch", "mina"})
+	@ValueSource(strings = {"jsch", "mina", "bjl"})
 	void safeOverwriteKeepsTheOldFileUntilClose(String impl) throws IOException {
 		String d = freshDir(impl, "safe");
 		SftpFileSourceFactory f = safe(impl);
@@ -251,7 +256,7 @@ public class SftpBatch21Test {
 
 	/** If putting the new file in place fails, the old one is untouched and the temporary file is removed. */
 	@ParameterizedTest
-	@ValueSource(strings = {"jsch", "mina"})
+	@ValueSource(strings = {"jsch", "mina", "bjl"})
 	void failedSafeOverwriteLeavesTheOldFile(String impl) throws IOException {
 		String d = freshDir(impl, "safe-fail");
 		SftpFileSourceFactory f = safe(impl);
@@ -278,7 +283,7 @@ public class SftpBatch21Test {
 	 * temporary file, still there, is removed rather than left behind.
 	 */
 	@ParameterizedTest
-	@ValueSource(strings = {"jsch", "mina"})
+	@ValueSource(strings = {"jsch", "mina", "bjl"})
 	void failedReplaceRemovesTheTemporaryFile(String impl) throws IOException {
 		String d = freshDir(impl, "safe-dir");
 		SftpFileSourceFactory f = safe(impl);
@@ -299,7 +304,7 @@ public class SftpBatch21Test {
 
 	/** A new file and an append work as usual with safeOverwrite on. */
 	@ParameterizedTest
-	@ValueSource(strings = {"jsch", "mina"})
+	@ValueSource(strings = {"jsch", "mina", "bjl"})
 	void safeOverwriteForNewFilesAndAppends(String impl) throws IOException {
 		String d = freshDir(impl, "safe-new");
 		SftpFileSourceFactory f = safe(impl);
@@ -317,7 +322,7 @@ public class SftpBatch21Test {
 
 	/** The new file keeps the old one's permission bits. */
 	@ParameterizedTest
-	@ValueSource(strings = {"jsch", "mina"})
+	@ValueSource(strings = {"jsch", "mina", "bjl"})
 	void safeOverwriteKeepsPermissions(String impl) throws IOException {
 		TestServer.assumeOpenSsh();
 		String d = freshDir(impl, "safe-mode");
@@ -334,7 +339,7 @@ public class SftpBatch21Test {
 
 	/** Writing through a symbolic link replaces the file it points to; the link stays a link. */
 	@ParameterizedTest
-	@ValueSource(strings = {"jsch", "mina"})
+	@ValueSource(strings = {"jsch", "mina", "bjl"})
 	void safeOverwriteThroughALink(String impl) throws IOException {
 		TestServer.assumeOpenSsh();
 		String d = freshDir(impl, "safe-link");
@@ -353,7 +358,7 @@ public class SftpBatch21Test {
 
 	/** The channel call underneath: rename that replaces an existing file. */
 	@ParameterizedTest
-	@ValueSource(strings = {"jsch", "mina"})
+	@ValueSource(strings = {"jsch", "mina", "bjl"})
 	void replaceRenamesOverAnExistingFile(String impl) throws IOException {
 		String d = freshDir(impl, "replace");
 		SftpFileSourceFactory f = factory(impl);
